@@ -1,0 +1,47 @@
+name: flutter_audio_fx
+description: >-
+  High-performance real-time audio DSP for Flutter, powered by Rust. Pitch
+  shift, auto-tune, noise suppression, EQ, reverb and more — sub-10 ms latency,
+  zero GC pauses, lock-free parameter updates.
+version: 0.2.0
+homepage: https://github.com/flutter_audio_fx/flutter_audio_fx
+repository: https://github.com/flutter_audio_fx/flutter_audio_fx
+issue_tracker: https://github.com/flutter_audio_fx/flutter_audio_fx/issues
+topics:
+  - audio
+  - dsp
+  - effects
+  - rust
+  - ffi
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+  flutter: ">=3.19.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  ffi: ^2.1.0
+  path_provider: ^2.1.0
+  permission_handler: ^11.3.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        ffiPlugin: true
+        package: dev.flutter_audio_fx
+        pluginClass: FlutterAudioFxPlugin
+      ios:
+        ffiPlugin: true
+      macos:
+        ffiPlugin: true
+      linux:
+        ffiPlugin: true
+      windows:
+        ffiPlugin: true

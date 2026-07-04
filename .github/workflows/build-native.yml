@@ -1,0 +1,291 @@
+name: Build native cores
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: "1.85.0"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # ─────────────────────────── Android ───────────────────────────
+  android:
+    name: Android (arm64 / armv7 / x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26d
+          add-to-path: false
+
+      - name: Install Rust + Android targets
+        run: |
+          rustup toolchain install ${{ env.RUST_VERSION }}
+          rustup default ${{ env.RUST_VERSION }}
+          rustup target add \
+            aarch64-linux-android \
+            armv7-linux-androideabi \
+            x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Build .so per ABI
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        working-directory: rust
+        run: |
+          cargo ndk \
+            -t aarch64-linux-android \
+            -t armv7-linux-androideabi \
+            -t x86_64-linux-android \
+            -o ../android/src/main/jniLibs \
+            build --release
+
+      - name: Stage artifact
+        run: |
+          mkdir -p artifact/android/src/main/jniLibs
+          cp -R android/src/main/jniLibs/* artifact/android/src/main/jniLibs/
+          (cd artifact && zip -r ../flutter_audio_fx_android.zip android)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flutter_audio_fx_android
+          path: flutter_audio_fx_android.zip
+          if-no-files-found: error
+
+  # ──────────────────────────── iOS ──────────────────────────────
+  ios:
+    name: iOS xcframework (device + simulator)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust + iOS targets
+        run: |
+          rustup toolchain install ${{ env.RUST_VERSION }}
+          rustup default ${{ env.RUST_VERSION }}
+          rustup target add \
+            aarch64-apple-ios \
+            aarch64-apple-ios-sim \
+            x86_64-apple-ios
+
+      - name: Build static libs for each iOS target
+        working-directory: rust
+        run: |
+          cargo build --release --target aarch64-apple-ios
+          cargo build --release --target aarch64-apple-ios-sim
+          cargo build --release --target x86_64-apple-ios
+
+      - name: lipo Apple Silicon + Intel simulator slices
+        working-directory: rust
+        run: |
+          mkdir -p ../ios/build/sim
+          lipo -create \
+            target/aarch64-apple-ios-sim/release/libflutter_audio_fx_core.a \
+            target/x86_64-apple-ios/release/libflutter_audio_fx_core.a \
+            -output ../ios/build/sim/libflutter_audio_fx_core.a
+
+      - name: Build xcframework
+        run: |
+          rm -rf ios/flutter_audio_fx_core.xcframework
+          xcodebuild -create-xcframework \
+            -library rust/target/aarch64-apple-ios/release/libflutter_audio_fx_core.a \
+            -library ios/build/sim/libflutter_audio_fx_core.a \
+            -output ios/flutter_audio_fx_core.xcframework
+
+      - name: Also keep a lipo'd device+sim universal .a (legacy podspec)
+        working-directory: rust
+        run: |
+          lipo -create \
+            target/aarch64-apple-ios/release/libflutter_audio_fx_core.a \
+            ../ios/build/sim/libflutter_audio_fx_core.a \
+            -output ../ios/libflutter_audio_fx_core.a
+
+      - name: Stage artifact
+        run: |
+          mkdir -p artifact/ios
+          cp -R ios/flutter_audio_fx_core.xcframework artifact/ios/
+          cp ios/libflutter_audio_fx_core.a artifact/ios/
+          (cd artifact && zip -r ../flutter_audio_fx_ios.zip ios)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flutter_audio_fx_ios
+          path: flutter_audio_fx_ios.zip
+          if-no-files-found: error
+
+  # ─────────────────────────── macOS ─────────────────────────────
+  macos:
+    name: macOS universal (arm64 + x86_64)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust + macOS targets
+        run: |
+          rustup toolchain install ${{ env.RUST_VERSION }}
+          rustup default ${{ env.RUST_VERSION }}
+          rustup target add \
+            aarch64-apple-darwin \
+            x86_64-apple-darwin
+
+      - name: Build static libs for each macOS arch
+        working-directory: rust
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+
+      - name: lipo into universal .a
+        working-directory: rust
+        run: |
+          lipo -create \
+            target/aarch64-apple-darwin/release/libflutter_audio_fx_core.a \
+            target/x86_64-apple-darwin/release/libflutter_audio_fx_core.a \
+            -output ../macos/libflutter_audio_fx_core.a
+
+      - name: Stage artifact
+        run: |
+          mkdir -p artifact/macos
+          cp macos/libflutter_audio_fx_core.a artifact/macos/
+          (cd artifact && zip -r ../flutter_audio_fx_macos.zip macos)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flutter_audio_fx_macos
+          path: flutter_audio_fx_macos.zip
+          if-no-files-found: error
+
+  # ─────────────────────────── Linux ─────────────────────────────
+  linux:
+    name: Linux x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install ${{ env.RUST_VERSION }}
+          rustup default ${{ env.RUST_VERSION }}
+
+      - name: Install ALSA dev headers (cpal dependency)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev pkg-config
+
+      - name: Build
+        working-directory: rust
+        run: cargo build --release
+
+      - name: Stage artifact
+        run: |
+          mkdir -p artifact/linux
+          cp rust/target/release/libflutter_audio_fx_core.so artifact/linux/
+          (cd artifact && zip -r ../flutter_audio_fx_linux.zip linux)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flutter_audio_fx_linux
+          path: flutter_audio_fx_linux.zip
+          if-no-files-found: error
+
+  # ────────────────────────── Windows ────────────────────────────
+  windows:
+    name: Windows x86_64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install ${{ env.RUST_VERSION }}
+          rustup default ${{ env.RUST_VERSION }}
+
+      - name: Build
+        working-directory: rust
+        run: cargo build --release
+
+      - name: Stage artifact
+        run: |
+          mkdir -p artifact/windows
+          cp rust/target/release/flutter_audio_fx_core.dll artifact/windows/
+          cp rust/target/release/flutter_audio_fx_core.dll.lib artifact/windows/ || true
+          (cd artifact && 7z a ../flutter_audio_fx_windows.zip windows)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flutter_audio_fx_windows
+          path: flutter_audio_fx_windows.zip
+          if-no-files-found: error
+
+  # ─────────────────────────── Tests ─────────────────────────────
+  test-rust:
+    name: cargo test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: |
+          rustup toolchain install ${{ env.RUST_VERSION }}
+          rustup default ${{ env.RUST_VERSION }}
+      - name: ALSA dev headers
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - working-directory: rust
+        run: cargo test --release
+
+  test-dart:
+    name: flutter test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.x'
+          channel: stable
+      - run: flutter pub get
+      - run: flutter analyze lib test
+      - run: flutter test
+
+  # ─────────── On tag push: bundle everything into a release ─────────
+  release:
+    name: Publish release bundle
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [android, ios, macos, linux, windows, test-rust, test-dart]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Build single drop-in bundle
+        run: |
+          mkdir bundle
+          for z in dist/*/*.zip; do
+            unzip -o "$z" -d bundle
+          done
+          (cd bundle && zip -r ../flutter_audio_fx_native_${{ github.ref_name }}.zip .)
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*/*.zip
+            flutter_audio_fx_native_${{ github.ref_name }}.zip
+          generate_release_notes: true

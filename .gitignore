@@ -1,0 +1,25 @@
+# Flutter
+.dart_tool/
+.packages
+build/
+*.iml
+.idea/
+.vscode/
+*.lock
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# Rust
+rust/target/
+# Cargo.lock is committed: this crate ships as a native binary, so builds must
+# be reproducible. (Un-ignore it despite the broad *.lock rule above.)
+!rust/Cargo.lock
+
+# Generated
+lib/src/rust/
+*.g.dart
+*.freezed.dart
+
+# OS
+.DS_Store
+Thumbs.db

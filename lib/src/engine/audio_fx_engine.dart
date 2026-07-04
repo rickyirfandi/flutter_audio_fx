@@ -1,0 +1,278 @@
+import 'dart:async';
+import 'dart:ffi';
+import 'dart:typed_data';
+
+import 'package:ffi/ffi.dart';
+
+import '../effects/effect.dart';
+import '../ffi/bindings.dart' as native;
+import '../models/pitch_data.dart';
+import '../models/spectrum_data.dart';
+import 'audio_format.dart';
+import 'engine_config.dart';
+
+enum ProcessingMode { idle, realtime, recording, offline, preview }
+
+/// High-level engine façade. Owns the lifecycle of the native runtime and
+/// surfaces effect-chain edits, file I/O, and visualisation streams.
+class AudioFxEngine {
+  AudioFxEngine({this.config = const EngineConfig()});
+
+  final EngineConfig config;
+  final List<AudioEffect> _chain = [];
+  ProcessingMode _mode = ProcessingMode.idle;
+  bool _initialized = false;
+  Timer? _vizTimer;
+
+  // Pre-allocated FFI scratch buffers to avoid per-poll allocation.
+  static const int _kSpectrumBins = 1024;
+  late final Pointer<Float> _spectrumBuf =
+      calloc.allocate<Float>(_kSpectrumBins * sizeOf<Float>());
+  late final Pointer<Float> _scalarF1 = calloc.allocate<Float>(sizeOf<Float>());
+  late final Pointer<Float> _scalarF2 = calloc.allocate<Float>(sizeOf<Float>());
+  late final Pointer<Uint32> _scalarU =
+      calloc.allocate<Uint32>(sizeOf<Uint32>());
+
+  final _spectrumCtrl = StreamController<SpectrumData>.broadcast();
+  final _waveformCtrl = StreamController<Float32List>.broadcast();
+  final _pitchCtrl = StreamController<PitchData>.broadcast();
+  final _levelCtrl = StreamController<double>.broadcast();
+
+  // ─── Lifecycle ───
+
+  Future<void> init() async {
+    if (_initialized) return;
+    final ok = native.fxEngineInit(config.sampleRate, config.bufferSize);
+    if (!ok) throw StateError('Native engine init failed');
+    _initialized = true;
+  }
+
+  void _ensureInit() {
+    if (!_initialized) {
+      native.fxEngineInit(config.sampleRate, config.bufferSize);
+      _initialized = true;
+    }
+  }
+
+  // ─── Chain management ───
+
+  List<AudioEffect> get chain => List.unmodifiable(_chain);
+
+  void setChain(List<AudioEffect> effects) {
+    _ensureInit();
+    _chain
+      ..clear()
+      ..addAll(effects);
+    _commitChain();
+  }
+
+  void clearChain() {
+    _chain.clear();
+    _commitChain();
+  }
+
+  void toggleEffect(int index, bool enabled) {
+    if (index < 0 || index >= _chain.length) return;
+    _chain[index].enabled = enabled;
+    native.fxChainToggle(index, enabled);
+  }
+
+  void updateParam(int effectIndex, String paramName, double value) {
+    if (effectIndex < 0 || effectIndex >= _chain.length) return;
+    _chain[effectIndex].updateParam(paramName, value);
+    final namePtr = paramName.toNativeUtf8();
+    try {
+      native.fxChainUpdateParam(effectIndex, namePtr, value);
+    } finally {
+      calloc.free(namePtr);
+    }
+  }
+
+  void _commitChain() {
+    _ensureInit();
+    native.fxChainBegin();
+    for (final fx in _chain) {
+      final tyPtr = fx.type.toNativeUtf8();
+      try {
+        final pushed = native.fxChainPushEffect(tyPtr, fx.enabled);
+        if (pushed != 0) continue;
+        for (final entry in fx.toParams().entries) {
+          final namePtr = entry.key.toNativeUtf8();
+          try {
+            native.fxChainSetParam(namePtr, entry.value);
+          } finally {
+            calloc.free(namePtr);
+          }
+        }
+      } finally {
+        calloc.free(tyPtr);
+      }
+    }
+    native.fxChainCommit();
+  }
+
+  // ─── Real-time ───
+
+  Future<void> startMic() async {
+    _guardIdle();
+    _ensureInit();
+    final rc = native.fxEngineStart();
+    if (rc != 0) throw StateError('startMic failed (code $rc)');
+    _mode = ProcessingMode.realtime;
+    _startVizPolling();
+  }
+
+  Future<void> startMicWithRecording({
+    required String rawOutputPath,
+    String? processedOutputPath,
+  }) async {
+    _guardIdle();
+    _ensureInit();
+    final rawPtr = rawOutputPath.toNativeUtf8();
+    final procPtr =
+        processedOutputPath?.toNativeUtf8() ?? Pointer<Utf8>.fromAddress(0);
+    try {
+      final rc = native.fxEngineStartRecording(rawPtr, procPtr);
+      if (rc != 0) throw StateError('startMicWithRecording failed ($rc)');
+    } finally {
+      calloc.free(rawPtr);
+      if (processedOutputPath != null) calloc.free(procPtr);
+    }
+    _mode = ProcessingMode.recording;
+    _startVizPolling();
+  }
+
+  Future<void> stop() async {
+    if (_mode == ProcessingMode.idle) return;
+    _stopVizPolling();
+    final rc = native.fxEngineStop();
+    if (rc != 0) throw StateError('stop failed ($rc)');
+    _mode = ProcessingMode.idle;
+  }
+
+  // ─── File processing ───
+
+  Future<String> processFile({
+    required String inputPath,
+    required String outputPath,
+    AudioFormat format = const AudioFormat.wav(),
+    void Function(double)? onProgress,
+  }) async {
+    _guardIdle();
+    _ensureInit();
+    if (format is Mp3Format) {
+      throw UnsupportedError(
+          'MP3 export is not implemented yet. Use AudioFormat.wav() and '
+          'transcode externally.');
+    }
+    _mode = ProcessingMode.offline;
+    final inPtr = inputPath.toNativeUtf8();
+    final outPtr = outputPath.toNativeUtf8();
+    try {
+      final rc = native.fxEngineProcessFile(inPtr, outPtr);
+      if (rc != 0) throw StateError('processFile failed ($rc)');
+      onProgress?.call(1.0);
+      return outputPath;
+    } finally {
+      calloc.free(inPtr);
+      calloc.free(outPtr);
+      _mode = ProcessingMode.idle;
+    }
+  }
+
+  Future<void> previewFile({required String inputPath}) async {
+    _guardIdle();
+    _ensureInit();
+    final ptr = inputPath.toNativeUtf8();
+    try {
+      final rc = native.fxEnginePreviewFile(ptr);
+      if (rc != 0) throw StateError('previewFile failed ($rc)');
+    } finally {
+      calloc.free(ptr);
+    }
+    _mode = ProcessingMode.preview;
+    _startVizPolling();
+  }
+
+  Future<void> stopPreview() => stop();
+
+  // ─── Visualization streams ───
+
+  Stream<SpectrumData> get spectrumStream => _spectrumCtrl.stream;
+  Stream<Float32List> get waveformStream => _waveformCtrl.stream;
+  Stream<PitchData> get pitchStream => _pitchCtrl.stream;
+  Stream<double> get levelStream => _levelCtrl.stream;
+
+  void _startVizPolling() {
+    _stopVizPolling();
+    _vizTimer = Timer.periodic(const Duration(milliseconds: 16), (_) => _pollViz());
+  }
+
+  void _stopVizPolling() {
+    _vizTimer?.cancel();
+    _vizTimer = null;
+  }
+
+  void _pollViz() {
+    final n = native.fxGetSpectrum(
+        _spectrumBuf, _kSpectrumBins, _scalarF1, _scalarF2, _scalarU);
+    if (n > 0 && _spectrumCtrl.hasListener) {
+      final mags = Float32List(n);
+      for (var i = 0; i < n; i++) {
+        mags[i] = _spectrumBuf[i];
+      }
+      _spectrumCtrl.add(SpectrumData(
+        magnitudes: mags,
+        dominantFreq: _scalarF1.value,
+        rms: _scalarF2.value,
+        binCount: _scalarU.value,
+        freqResolution: config.sampleRate / (_scalarU.value * 2.0),
+      ));
+      // Amplitude-envelope point for WaveformVisualizer (one level per frame;
+      // this is a meter/envelope, not sample-accurate audio).
+      _waveformCtrl.add(Float32List.fromList(<double>[_scalarF2.value]));
+    }
+    if (_pitchCtrl.hasListener) {
+      native.fxGetPitch(_scalarF1, _scalarF2);
+      final hz = _scalarF1.value;
+      final conf = _scalarF2.value;
+      _pitchCtrl.add(PitchData.fromFrequency(hz, confidence: conf));
+    }
+    if (_levelCtrl.hasListener) {
+      _levelCtrl.add(native.fxGetRmsLevel());
+    }
+  }
+
+  // ─── State ───
+
+  ProcessingMode get mode => _mode;
+  bool get isRunning => _mode != ProcessingMode.idle;
+
+  double get totalLatencyMs =>
+      native.fxEngineChainLatencyMs() + config.bufferLatencyMs;
+
+  List<Map<String, dynamic>> chainToJson() =>
+      _chain.map((e) => e.toJson()).toList();
+
+  String get chainSummary =>
+      _chain.where((e) => e.enabled).map((e) => e.displayName).join(' → ');
+
+  void _guardIdle() {
+    if (_mode != ProcessingMode.idle) {
+      throw StateError('Engine busy (${_mode.name}). Call stop() first.');
+    }
+  }
+
+  void dispose() {
+    stop();
+    _stopVizPolling();
+    _spectrumCtrl.close();
+    _waveformCtrl.close();
+    _pitchCtrl.close();
+    _levelCtrl.close();
+    calloc.free(_spectrumBuf);
+    calloc.free(_scalarF1);
+    calloc.free(_scalarF2);
+    calloc.free(_scalarU);
+  }
+}

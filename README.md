@@ -1,0 +1,169 @@
+# flutter_audio_fx
+
+High-performance real-time audio DSP for Flutter, powered by Rust.
+
+Pitch shift, auto-tune, noise suppression, EQ, reverb, and 11 effects total —
+sub-10 ms chain latency, zero allocations on the audio thread, lock-free
+parameter updates.
+
+## Features
+
+- **11 audio effects**: Noise Gate, RNNoise-based Noise Suppression, Pitch
+  Shift, Auto-Tune, 10-band Equalizer, Compressor, Limiter, Reverb, Chorus,
+  Delay, Distortion (soft/hard/tanh/bitcrush).
+- **Real-time mic → effects → speaker** with cpal on every desktop and mobile
+  platform Flutter supports.
+- **Offline file processing** (WAV in, WAV out) — faster than real-time.
+- **Composable effect chains** — reorder, toggle, swap atomically.
+- **Lock-free parameter updates** — every knob is an `AtomicF32`; writes from
+  the UI never glitch the audio thread.
+- **Built-in presets**: T-Pain, Radio Host, Chipmunk, Deep Voice, Lo-Fi,
+  Karaoke, Podcast, Telephone, Robot, Echo Chamber, Gentle Auto-Tune.
+- **Visualizer widgets**: spectrum analyzer, waveform, pitch indicator.
+- **Tap recording** — write raw mic input and/or processed output to WAV
+  while the live chain is running, on a worker thread.
+
+## Quick start
+
+```dart
+import 'package:flutter_audio_fx/flutter_audio_fx.dart';
+
+final engine = AudioFxEngine();
+await engine.init();
+
+engine.setChain([
+  NoiseSuppress(strength: 0.8),
+  AutoTune(
+    key: MusicalKey.C,
+    scale: MusicalScale.major,
+    correctionSpeed: 0.0, // T-Pain mode
+  ),
+  Reverb(roomSize: 0.5, mix: 0.3),
+  Limiter(ceilingDb: -1.0),
+]);
+
+await engine.startMic();
+
+// Update a param without glitches.
+engine.updateParam(1, 'speed', 0.5);
+
+await engine.stop();
+```
+
+### Presets
+
+```dart
+engine.setChain(BuiltInPresets.tpain);
+engine.setChain(BuiltInPresets.podcast);
+engine.setChain(BuiltInPresets.lofi);
+```
+
+### Recording
+
+```dart
+await engine.startMicWithRecording(
+  rawOutputPath: '/path/raw.wav',
+  processedOutputPath: '/path/processed.wav',
+);
+// ...
+await engine.stop();
+```
+
+### Offline file processing
+
+```dart
+await engine.processFile(
+  inputPath: 'recording.wav',
+  outputPath: 'processed.wav',
+  format: AudioFormat.wav(),
+);
+```
+
+> MP3 export is reserved for a future release. Calling `processFile` with
+> `AudioFormat.mp3()` throws `UnsupportedError`.
+
+### Visualizers
+
+```dart
+SpectrumVisualizer(
+  stream: engine.spectrumStream,
+  barCount: 32,
+  barColor: Colors.cyan,
+  height: 120,
+)
+WaveformVisualizer(
+  stream: engine.waveformStream,
+  lineColor: Colors.white,
+  height: 100,
+)
+PitchIndicator(
+  stream: engine.pitchStream,
+  activeColor: Colors.green,
+)
+```
+
+## Building the native core
+
+The native engine is a Rust crate at `rust/`. Use the Makefile to build the
+artefacts and place them where each platform expects:
+
+```bash
+make android   # → android/src/main/jniLibs/<abi>/libflutter_audio_fx_core.so
+make ios       # → ios/libflutter_audio_fx_core.a (universal)
+make macos     # → macos/libflutter_audio_fx_core.a (universal)
+make linux     # → linux/libflutter_audio_fx_core.so
+make windows   # → windows/flutter_audio_fx_core.dll
+```
+
+You will need:
+
+- The **Rust toolchain** (`rust-toolchain` ≥ 1.80) and the relevant cross
+  targets (`cargo-ndk` for Android, the Apple SDKs for iOS/macOS).
+- **Android NDK r26+**, `minSdk 26` (AAudio).
+- **iOS 13+**, Xcode 15+. Add `NSMicrophoneUsageDescription` to your host
+  app's `Info.plist`.
+
+## Architecture
+
+```
+Flutter (Dart)
+  ├── AudioFxEngine            (lifecycle, chain editing, viz polling)
+  ├── AudioEffect classes      (Dart-side typed configs)
+  └── Visualizer widgets
+                │
+                │  dart:ffi (flat C ABI — see rust/src/api.rs)
+                │
+Rust DSP core
+  ├── effects/                 (NoiseGate, PitchShift, AutoTune, …)
+  ├── graph/                   (AudioEffect trait, EffectSlot, AtomicF32)
+  ├── analysis/                (cached-FFT spectrum, YIN pitch detector)
+  ├── engine/runtime.rs        (cpal streams, ArcSwap chain, worker threads)
+  └── io/file_io.rs            (WAV reader/writer via hound)
+```
+
+### Audio-thread invariants
+
+The cpal callback (≈ 2.7 ms deadline at 128 samples / 48 kHz) does only:
+
+1. Drain the mic ringbuf into the output buffer.
+2. `ArcSwap::load` the current chain (one atomic read).
+3. Call `process` on every effect — all working buffers are pre-allocated
+   in `new()`.
+4. Push processed samples into ringbufs consumed by writer threads (recording)
+   and worker threads (pitch detection).
+5. Try-lock the spectrum slot and store an RMS atomic.
+
+No heap allocation, no mutex blocking, no syscalls.
+
+## Performance targets
+
+| Metric                          | Target |
+|---------------------------------|--------|
+| Full chain latency              | < 10 ms |
+| Audio callback time             | < 3 ms per buffer |
+| CPU (all effects on, 1 channel) | < 20% on a single mid-range core |
+| Memory                          | < 50 MB total |
+
+## License
+
+MIT.
