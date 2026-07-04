@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_audio_fx/flutter_audio_fx.dart';
 import '../controllers/app_controller.dart';
 import '../models/recording_project.dart';
 import '../theme/voxforge_theme.dart';
@@ -33,8 +32,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   void _refresh() {
     if (!mounted) return;
     setState(() {});
-    if (_ctrl.isRecording && !_pulse.isAnimating) _pulse.repeat(reverse: true);
-    else if (!_ctrl.isRecording && _pulse.isAnimating) { _pulse.stop(); _pulse.reset(); }
+    if (_ctrl.isRecording && !_pulse.isAnimating) {
+      _pulse.repeat(reverse: true);
+    } else if (!_ctrl.isRecording && _pulse.isAnimating) {
+      _pulse.stop();
+      _pulse.reset();
+    }
+    final error = _ctrl.lastError;
+    if (error != null) {
+      _ctrl.clearError();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));
+    }
   }
 
   @override
@@ -108,13 +116,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       const SizedBox(height: Spacing.lg),
 
       if (!_ctrl.isRecording) ...[
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: Spacing.md),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: Spacing.md),
           child: Row(children: [
-            const Text('PRESETS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+            Text('PRESETS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
               letterSpacing: 2, color: VoxForgeTheme.textMuted)),
-            const SizedBox(width: 8),
-            const Expanded(child: Divider(color: VoxForgeTheme.border, height: 1)),
+            SizedBox(width: 8),
+            Expanded(child: Divider(color: VoxForgeTheme.border, height: 1)),
           ])),
         const SizedBox(height: Spacing.sm),
         PresetCarousel(activePresetId: _ctrl.activePresetId, onPresetSelected: _ctrl.applyPreset),

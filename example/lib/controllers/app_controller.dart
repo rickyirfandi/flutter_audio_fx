@@ -20,15 +20,36 @@ class AppController extends ChangeNotifier {
   String _activePresetId = 'tpain';
   bool _isExporting = false;
   double _exportProgress = 0.0;
+  String? _lastError;
+  StreamSubscription<void>? _previewDoneSub;
 
   AppController() {
     _init();
   }
 
   Future<void> _init() async {
-    await engine.init();
-    _applyPreset('tpain');
+    try {
+      await engine.init();
+      _applyPreset('tpain');
+      // Reset the play state when a preview runs to the end of the file.
+      _previewDoneSub = engine.previewCompleteStream.listen((_) {
+        _isPlaying = false;
+        notifyListeners();
+      });
+    } catch (e) {
+      _setError('Engine init failed: $e');
+    }
   }
+
+  void _setError(String msg) {
+    _lastError = msg;
+    debugPrint('[VoxForge] $msg');
+    notifyListeners();
+  }
+
+  /// Most recent engine/recording error, cleared on the next successful action.
+  String? get lastError => _lastError;
+  void clearError() { _lastError = null; notifyListeners(); }
 
   // ─── Getters ───
   RecordingMode get mode => _mode;
@@ -62,6 +83,7 @@ class AppController extends ChangeNotifier {
   // ─── Recording ───
   Future<void> startRecording() async {
     if (_isRecording) return;
+    _lastError = null;
 
     // Get recordings directory
     final dir = await getApplicationDocumentsDirectory();
@@ -69,7 +91,7 @@ class AppController extends ChangeNotifier {
     final recDir = Directory('${dir.path}/recordings/$id');
     await recDir.create(recursive: true);
 
-    _currentProject = RecordingProject(
+    final project = RecordingProject(
       id: id,
       title: 'Recording ${DateTime.now().hour}:${DateTime.now().minute.toString().padLeft(2, '0')}',
       createdAt: DateTime.now(),
@@ -78,31 +100,27 @@ class AppController extends ChangeNotifier {
       rawPath: '${recDir.path}/raw.wav',
     );
 
+    // Start the engine BEFORE any recording bookkeeping: a failed start must
+    // not leave a running timer or a phantom project with no audio file.
+    try {
+      engine.setChain(List.from(_chain));
+      await engine.startMicWithRecording(
+        rawOutputPath: project.rawPath,
+        processedOutputPath:
+            _mode == RecordingMode.live ? '${recDir.path}/processed.wav' : null,
+      );
+    } catch (e) {
+      _setError('Could not start recording: $e');
+      return;
+    }
+
+    _currentProject = project;
     _isRecording = true;
     _elapsed = Duration.zero;
     _timer = Timer.periodic(const Duration(milliseconds: 50), (_) {
       _elapsed += const Duration(milliseconds: 50);
       notifyListeners();
     });
-
-    try {
-      engine.setChain(List.from(_chain));
-      if (_mode == RecordingMode.live) {
-        await engine.startMicWithRecording(
-          rawOutputPath: _currentProject!.rawPath,
-          processedOutputPath: '${recDir.path}/processed.wav',
-        );
-      } else {
-        await engine.startMicWithRecording(
-          rawOutputPath: _currentProject!.rawPath,
-        );
-      }
-    } catch (e) {
-      debugPrint('[VoxForge] Recording start error: $e');
-      // Fallback to mic-only (no file recording)
-      try { await engine.startMic(); } catch (_) {}
-    }
-
     notifyListeners();
   }
 
@@ -134,15 +152,18 @@ class AppController extends ChangeNotifier {
   // ─── Playback ───
   Future<void> startPlayback(RecordingProject project) async {
     if (_isRecording) return;
+    _lastError = null;
     _currentProject = project;
-    _isPlaying = true;
     engine.setChain(project.effectChain.isNotEmpty
         ? List.from(project.effectChain)
         : List.from(_chain));
     try {
       await engine.previewFile(inputPath: project.rawPath);
+      _isPlaying = true;
     } catch (e) {
-      debugPrint('[VoxForge] Playback error: $e');
+      _isPlaying = false;
+      _setError('Playback failed: $e');
+      return;
     }
     notifyListeners();
   }
@@ -243,7 +264,7 @@ class AppController extends ChangeNotifier {
       _exportProgress = 1.0; _isExporting = false; notifyListeners();
       return result;
     } catch (e) {
-      debugPrint('[VoxForge] Export error: $e');
+      _setError('Export failed: $e');
       _isExporting = false; notifyListeners();
       return null;
     }
@@ -255,5 +276,10 @@ class AppController extends ChangeNotifier {
   }
 
   @override
-  void dispose() { _timer?.cancel(); engine.dispose(); super.dispose(); }
+  void dispose() {
+    _timer?.cancel();
+    _previewDoneSub?.cancel();
+    engine.dispose();
+    super.dispose();
+  }
 }

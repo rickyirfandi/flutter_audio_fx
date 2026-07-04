@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:ffi';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
@@ -12,6 +13,20 @@ import 'audio_format.dart';
 import 'engine_config.dart';
 
 enum ProcessingMode { idle, realtime, recording, offline, preview }
+
+/// Runs the blocking native file-processing call. Top-level so [Isolate.run]
+/// can send it to a worker isolate (the bindings re-open the shared library
+/// there; the underlying Rust runtime is process-wide).
+int _processFileNative(String inputPath, String outputPath) {
+  final inPtr = inputPath.toNativeUtf8();
+  final outPtr = outputPath.toNativeUtf8();
+  try {
+    return native.fxEngineProcessFile(inPtr, outPtr);
+  } finally {
+    calloc.free(inPtr);
+    calloc.free(outPtr);
+  }
+}
 
 /// High-level engine façade. Owns the lifecycle of the native runtime and
 /// surfaces effect-chain edits, file I/O, and visualisation streams.
@@ -37,20 +52,31 @@ class AudioFxEngine {
   final _waveformCtrl = StreamController<Float32List>.broadcast();
   final _pitchCtrl = StreamController<PitchData>.broadcast();
   final _levelCtrl = StreamController<double>.broadcast();
+  final _previewDoneCtrl = StreamController<void>.broadcast();
 
   // ─── Lifecycle ───
 
   Future<void> init() async {
-    if (_initialized) return;
-    final ok = native.fxEngineInit(config.sampleRate, config.bufferSize);
-    if (!ok) throw StateError('Native engine init failed');
-    _initialized = true;
+    _ensureInit();
   }
 
   void _ensureInit() {
-    if (!_initialized) {
-      native.fxEngineInit(config.sampleRate, config.bufferSize);
-      _initialized = true;
+    if (_initialized) return;
+    final ok = native.fxEngineInit(config.sampleRate, config.bufferSize);
+    if (!ok) {
+      throw StateError('Native engine init failed: ${_lastNativeError()}');
+    }
+    _initialized = true;
+  }
+
+  /// Reads the most recent native error message (empty string if none).
+  static String _lastNativeError() {
+    final buf = calloc.allocate<Uint8>(512);
+    try {
+      final n = native.fxLastErrorMessage(buf.cast<Utf8>(), 512);
+      return n == 0 ? '' : buf.cast<Utf8>().toDartString(length: n);
+    } finally {
+      calloc.free(buf);
     }
   }
 
@@ -117,7 +143,9 @@ class AudioFxEngine {
     _guardIdle();
     _ensureInit();
     final rc = native.fxEngineStart();
-    if (rc != 0) throw StateError('startMic failed (code $rc)');
+    if (rc != 0) {
+      throw StateError('startMic failed (code $rc): ${_lastNativeError()}');
+    }
     _mode = ProcessingMode.realtime;
     _startVizPolling();
   }
@@ -133,7 +161,10 @@ class AudioFxEngine {
         processedOutputPath?.toNativeUtf8() ?? Pointer<Utf8>.fromAddress(0);
     try {
       final rc = native.fxEngineStartRecording(rawPtr, procPtr);
-      if (rc != 0) throw StateError('startMicWithRecording failed ($rc)');
+      if (rc != 0) {
+        throw StateError(
+            'startMicWithRecording failed (code $rc): ${_lastNativeError()}');
+      }
     } finally {
       calloc.free(rawPtr);
       if (processedOutputPath != null) calloc.free(procPtr);
@@ -146,12 +177,22 @@ class AudioFxEngine {
     if (_mode == ProcessingMode.idle) return;
     _stopVizPolling();
     final rc = native.fxEngineStop();
-    if (rc != 0) throw StateError('stop failed ($rc)');
+    if (rc != 0) {
+      throw StateError('stop failed (code $rc): ${_lastNativeError()}');
+    }
     _mode = ProcessingMode.idle;
   }
 
   // ─── File processing ───
 
+  /// Process [inputPath] through the current chain into [outputPath].
+  ///
+  /// The native call is synchronous and can take seconds for long files, so
+  /// it runs on a worker isolate; [onProgress] is fed from the main isolate
+  /// by polling the native progress counter (~10 Hz).
+  ///
+  /// Multi-channel input is downmixed to mono (the chain is mono) and the
+  /// output is written as mono WAV.
   Future<String> processFile({
     required String inputPath,
     required String outputPath,
@@ -166,16 +207,22 @@ class AudioFxEngine {
           'transcode externally.');
     }
     _mode = ProcessingMode.offline;
-    final inPtr = inputPath.toNativeUtf8();
-    final outPtr = outputPath.toNativeUtf8();
+    Timer? progressTimer;
+    if (onProgress != null) {
+      progressTimer = Timer.periodic(const Duration(milliseconds: 100),
+          (_) => onProgress(native.fxProcessFileProgress()));
+    }
     try {
-      final rc = native.fxEngineProcessFile(inPtr, outPtr);
-      if (rc != 0) throw StateError('processFile failed ($rc)');
+      // The native runtime is a process-wide singleton, so the worker isolate
+      // operates on the same engine the main isolate initialized.
+      final rc = await Isolate.run(() => _processFileNative(inputPath, outputPath));
+      if (rc != 0) {
+        throw StateError('processFile failed (code $rc): ${_lastNativeError()}');
+      }
       onProgress?.call(1.0);
       return outputPath;
     } finally {
-      calloc.free(inPtr);
-      calloc.free(outPtr);
+      progressTimer?.cancel();
       _mode = ProcessingMode.idle;
     }
   }
@@ -186,7 +233,9 @@ class AudioFxEngine {
     final ptr = inputPath.toNativeUtf8();
     try {
       final rc = native.fxEnginePreviewFile(ptr);
-      if (rc != 0) throw StateError('previewFile failed ($rc)');
+      if (rc != 0) {
+        throw StateError('previewFile failed (code $rc): ${_lastNativeError()}');
+      }
     } finally {
       calloc.free(ptr);
     }
@@ -203,6 +252,11 @@ class AudioFxEngine {
   Stream<PitchData> get pitchStream => _pitchCtrl.stream;
   Stream<double> get levelStream => _levelCtrl.stream;
 
+  /// Fires once each time a [previewFile] playback reaches the end of the
+  /// file. The engine returns to [ProcessingMode.idle] automatically; no
+  /// [stop] call is needed for a preview that ran to completion.
+  Stream<void> get previewCompleteStream => _previewDoneCtrl.stream;
+
   void _startVizPolling() {
     _stopVizPolling();
     _vizTimer = Timer.periodic(const Duration(milliseconds: 16), (_) => _pollViz());
@@ -214,6 +268,16 @@ class AudioFxEngine {
   }
 
   void _pollViz() {
+    // Preview playback flips the native running flag off at end-of-file, but
+    // the Dart mode used to stay `preview`, wedging the engine ("Engine
+    // busy") until an explicit stop(). Detect completion and return to idle.
+    if (_mode == ProcessingMode.preview && !native.fxEngineIsRunning()) {
+      _stopVizPolling();
+      native.fxEngineStop(); // release the finished output stream
+      _mode = ProcessingMode.idle;
+      _previewDoneCtrl.add(null);
+      return;
+    }
     final n = native.fxGetSpectrum(
         _spectrumBuf, _kSpectrumBins, _scalarF1, _scalarF2, _scalarU);
     if (n > 0 && _spectrumCtrl.hasListener) {
@@ -270,6 +334,7 @@ class AudioFxEngine {
     _waveformCtrl.close();
     _pitchCtrl.close();
     _levelCtrl.close();
+    _previewDoneCtrl.close();
     calloc.free(_spectrumBuf);
     calloc.free(_scalarF1);
     calloc.free(_scalarF2);

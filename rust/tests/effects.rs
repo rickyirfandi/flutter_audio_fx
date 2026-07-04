@@ -165,6 +165,127 @@ fn distortion_clips_into_range() {
 }
 
 #[test]
+fn reverb_is_stable_at_96k() {
+    // Delay lines retune to the stream rate; the tail must stay finite and
+    // decay just like at 48 kHz.
+    let mut fx = Reverb::new(0.5, 0.5, 0.5);
+    let sr = 96000u32;
+    let mut s: Vec<f32> = (0..4096)
+        .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / sr as f32).sin() * 0.5)
+        .collect();
+    s.extend(std::iter::repeat(0.0f32).take(sr as usize * 3));
+    let mut pos = 0;
+    while pos < s.len() {
+        let end = (pos + 128).min(s.len());
+        fx.process(&mut s[pos..end], sr);
+        pos = end;
+    }
+    assert_finite(&s, "reverb 96k");
+    let tail_rms = (s[s.len() - 1024..].iter().map(|x| x * x).sum::<f32>() / 1024.0).sqrt();
+    assert!(tail_rms < 0.1, "96k reverb tail did not decay: rms={tail_rms}");
+}
+
+#[test]
+fn reverb_survives_rate_change_mid_stream() {
+    // Simulates device renegotiation: same instance processed at two rates.
+    let mut fx = Reverb::new(0.7, 0.3, 0.5);
+    let a = sine(440.0, 4096, 48000);
+    let out_a = drive_in_chunks(&mut fx, a, 128);
+    assert_finite(&out_a, "reverb 48k leg");
+    let mut b: Vec<f32> = (0..4096)
+        .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 96000.0).sin() * 0.5)
+        .collect();
+    fx.process(&mut b, 96000);
+    assert_finite(&b, "reverb after retune to 96k");
+}
+
+#[test]
+fn chorus_is_stable_at_96k() {
+    // The old fixed-sample tuning assumed 48 kHz; delays now derive from the
+    // stream rate and must stay within the (larger) buffer at 96 kHz.
+    let mut fx = Chorus::new(1.5, 1.0, 0.5);
+    let s: Vec<f32> = (0..96000)
+        .map(|i| (2.0 * std::f32::consts::PI * 220.0 * i as f32 / 96000.0).sin() * 0.5)
+        .collect();
+    let mut out = s;
+    let mut pos = 0;
+    while pos < out.len() {
+        let end = (pos + 128).min(out.len());
+        fx.process(&mut out[pos..end], 96000);
+        pos = end;
+    }
+    assert_finite(&out, "chorus 96k");
+}
+
+#[test]
+fn noise_suppress_passes_through_at_non_48k() {
+    // RNNoise is 48 kHz-only; at other rates the effect must be a bit-exact
+    // bypass rather than garbling the signal.
+    let mut fx = NoiseSuppression::new(1.0);
+    let s = sine(300.0, 4410, 44100);
+    let original = s.clone();
+    let mut out = s;
+    fx.process(&mut out, 44100);
+    assert_eq!(out, original, "non-48k input must pass through unchanged");
+}
+
+#[test]
+fn distortion_type_switches_live_via_set_param() {
+    // Regression: "dist_type" used to be silently rejected by set_param, so
+    // the Dart-side type selection never reached the DSP.
+    let mut fx = Distortion::new(0.8, 1.0, 1.0, DistortionType::SoftClip);
+    assert!(fx.set_param("dist_type", 3.0), "dist_type must be settable");
+
+    let s = sine(220.0, 1024, SR);
+    let out_bitcrush = drive_in_chunks(&mut fx, s.clone(), 128);
+    assert_finite(&out_bitcrush, "distortion bitcrush via set_param");
+
+    fx.reset();
+    assert!(fx.set_param("dist_type", 0.0));
+    let out_softclip = drive_in_chunks(&mut fx, s, 128);
+
+    assert!(
+        out_bitcrush
+            .iter()
+            .zip(out_softclip.iter())
+            .any(|(a, b)| (a - b).abs() > 1e-4),
+        "switching dist_type must change the output",
+    );
+    // Out-of-range values clamp instead of wrapping.
+    assert!(fx.set_param("dist_type", 99.0));
+    assert_eq!(fx.dist_type(), DistortionType::Bitcrush);
+    assert!(fx.set_param("dist_type", -5.0));
+    assert_eq!(fx.dist_type(), DistortionType::SoftClip);
+}
+
+#[test]
+fn read_wav_mono_downmixes_stereo() {
+    use flutter_audio_fx_core::io::file_io;
+    let path = std::env::temp_dir().join("fx_test_stereo_downmix.wav");
+    let path = path.to_str().unwrap();
+
+    // Interleaved stereo: L = 0.5, R = 0.1 → mono average = 0.3.
+    let frames = 1000;
+    let mut interleaved = Vec::with_capacity(frames * 2);
+    for _ in 0..frames {
+        interleaved.push(0.5f32);
+        interleaved.push(0.1f32);
+    }
+    file_io::write_wav(path, &interleaved, 48000, 2).expect("write stereo wav");
+
+    let (mono, meta) = file_io::read_wav_mono(path).expect("read mono");
+    assert_eq!(meta.channels, 2, "meta must describe the source file");
+    assert_eq!(mono.len(), frames, "one sample per frame after downmix");
+    for (i, &s) in mono.iter().enumerate() {
+        assert!(
+            (s - 0.3).abs() < 0.01,
+            "frame {i}: expected ~0.3 downmix, got {s}"
+        );
+    }
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn yin_detects_a4() {
     use flutter_audio_fx_core::analysis::pitch::YinDetector;
     let mut yin = YinDetector::new(2048);

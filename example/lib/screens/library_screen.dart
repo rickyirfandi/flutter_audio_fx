@@ -67,7 +67,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(Icons.folder_open,
-              size: 56, color: VoxForgeTheme.textMuted.withOpacity(0.3)),
+              size: 56, color: VoxForgeTheme.textMuted.withValues(alpha: 0.3)),
           const SizedBox(height: 16),
           const Text(
             'No recordings yet',
@@ -102,7 +102,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             alignment: Alignment.centerRight,
             padding: const EdgeInsets.only(right: 20),
             decoration: BoxDecoration(
-              color: VoxForgeTheme.danger.withOpacity(0.15),
+              color: VoxForgeTheme.danger.withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(14),
             ),
             child: const Icon(Icons.delete_outline,
@@ -196,7 +196,7 @@ class _RecordingTile extends StatelessWidget {
                           color: (project.mode == RecordingMode.live
                                   ? VoxForgeTheme.accent
                                   : VoxForgeTheme.primary)
-                              .withOpacity(0.1),
+                              .withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(

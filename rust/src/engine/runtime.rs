@@ -8,6 +8,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleRate, StreamConfig, SupportedStreamConfig};
 use ringbuf::{HeapRb, traits::{Producer, Consumer, Split, Observer}};
 
+#[allow(unused_imports)]
 use crate::graph::{AudioEffect, EffectSlot};
 use crate::analysis::spectrum::{SpectrumAnalyzer, SpectrumData};
 use crate::analysis::pitch::YinDetector;
@@ -36,7 +37,9 @@ impl AtomicF32W {
 }
 
 pub(crate) struct SharedState {
-    pub chain: ArcSwap<Vec<EffectSlot>>,
+    /// Slots are individually `Arc`'d so chain edits can carry live slots
+    /// (with their DSP state) into the new chain instead of rebuilding them.
+    pub chain: ArcSwap<Vec<Arc<EffectSlot>>>,
     pub spectrum: Mutex<Option<SpectrumData>>,
     pub rms_level: AtomicF32W,
     pub pitch_freq: AtomicF32W,
@@ -62,6 +65,9 @@ pub struct AudioRuntime {
     buffer_size: usize,
     mode: AtomicU8,
     pub(crate) shared: Arc<SharedState>,
+    /// Progress of the current `process_file` call (0.0..=1.0), readable from
+    /// other threads while the blocking call runs.
+    file_progress: AtomicF32W,
 
     cmd_tx: mpsc::Sender<(Command, mpsc::Sender<Reply>)>,
     audio_thread: Mutex<Option<JoinHandle<()>>>,
@@ -90,6 +96,7 @@ impl AudioRuntime {
             sample_rate, buffer_size,
             mode: AtomicU8::new(Mode::Idle as u8),
             shared,
+            file_progress: AtomicF32W::new(0.0),
             cmd_tx,
             audio_thread: Mutex::new(Some(audio_thread)),
         }
@@ -113,16 +120,22 @@ impl AudioRuntime {
         s as f32 / self.sample_rate as f32 * 1000.0
     }
 
-    pub fn set_chain(
-        &self,
-        effects: Vec<Box<dyn AudioEffect>>,
-        detect_shareds: Vec<Arc<DetectShared>>,
-    ) {
-        let slots: Vec<EffectSlot> = effects.into_iter().map(EffectSlot::new).collect();
-        self.shared.chain.store(Arc::new(slots));
+    pub fn set_chain(&self, slots: Vec<Arc<EffectSlot>>) {
+        let shareds: Vec<Arc<DetectShared>> =
+            slots.iter().filter_map(|s| s.detect_shared()).collect();
+        // swap (not store) so this control thread usually holds the last
+        // reference to the old chain and its deallocation happens here, not
+        // inside the audio callback.
+        let _old = self.shared.chain.swap(Arc::new(slots));
         if let Ok(mut s) = self.shared.detect_shareds.lock() {
-            *s = detect_shareds;
+            *s = shareds;
         }
+    }
+
+    /// Snapshot of the live chain, used by the API layer to reuse slots when
+    /// rebuilding the chain.
+    pub(crate) fn chain_snapshot(&self) -> Arc<Vec<Arc<EffectSlot>>> {
+        self.shared.chain.load_full()
     }
 
     pub fn toggle_effect(&self, idx: usize, enabled: bool) {
@@ -159,17 +172,27 @@ impl AudioRuntime {
     }
 
     // ─── Offline file processing (control thread CPU only) ───
+    //
+    // The effect chain is mono, so multi-channel input is downmixed before
+    // processing (running time-based effects over interleaved frames would
+    // smear delays/reverbs across channels) and the output is written mono.
     pub fn process_file(
         &self, input_path: &str, output_path: &str,
     ) -> Result<String, String> {
         if self.is_running() {
             return Err("Stop the live engine before processing files".into());
         }
-        let (samples, meta) = file_io::read_wav(input_path)?;
+        self.file_progress.set(0.0);
+        let (samples, meta) = file_io::read_wav_mono(input_path)?;
         let chunk = 512;
         let mut output = Vec::with_capacity(samples.len());
         let mut pos = 0;
         let chain = self.shared.chain.load();
+        // Slots are reused across chain edits, so they may carry live-session
+        // state (reverb tails, delay lines). Start the render clean and leave
+        // it clean for the next realtime session.
+        // SAFETY: no audio stream is running (checked above).
+        for slot in chain.iter() { unsafe { slot.as_mut().reset(); } }
         while pos < samples.len() {
             let end = (pos + chunk).min(samples.len());
             let mut buf: Vec<f32> = samples[pos..end].to_vec();
@@ -181,10 +204,15 @@ impl AudioRuntime {
             }
             output.extend_from_slice(&buf);
             pos = end;
+            self.file_progress.set(pos as f32 / samples.len() as f32);
         }
-        file_io::write_wav(output_path, &output, meta.sample_rate, meta.channels)?;
+        for slot in chain.iter() { unsafe { slot.as_mut().reset(); } }
+        file_io::write_wav(output_path, &output, meta.sample_rate, 1)?;
+        self.file_progress.set(1.0);
         Ok(output_path.to_string())
     }
+
+    pub fn file_progress(&self) -> f32 { self.file_progress.get() }
 
     pub fn preview_file(&self, input_path: &str) -> Result<(), String> {
         let r = self.send(Command::PreviewFile(input_path.to_string()));
@@ -319,6 +347,12 @@ impl AudioState {
         let in_stream_cfg: StreamConfig  = in_cfg.config();
         let out_stream_cfg: StreamConfig = out_cfg.config();
 
+        if sr != 48000 {
+            log::warn!(
+                "negotiated {sr} Hz: noise suppression (RNNoise) requires 48 kHz \
+                 and will pass audio through unchanged at this rate");
+        }
+
         let mic_rb = HeapRb::<f32>::new((sr as usize) / 10);
         let (mut mic_prod, mut mic_cons) = mic_rb.split();
         let raw_rb = HeapRb::<f32>::new((sr as usize) * 2);
@@ -332,8 +366,6 @@ impl AudioState {
 
         let shared_in = Arc::clone(shared);
         let is_rec = recording;
-
-        shared.is_running.store(true, Ordering::Release);
 
         let input_stream = in_dev.build_input_stream(
             &in_stream_cfg,
@@ -359,13 +391,29 @@ impl AudioState {
         // Reusable mono scratch — generously sized so resize() never allocates
         // inside the callback for any realistic host buffer.
         let mut mono: Vec<f32> = Vec::with_capacity(16384);
+        // Input and output devices run on independent clocks, so their rates
+        // differ by up to a few hundred ppm even at the same nominal Hz. Left
+        // uncompensated, the mic ring slowly fills (input faster → dropped
+        // chunks + creeping latency) or starves (output faster → zero-fill
+        // clicks). Watermark correction: above `drift_high`, shed one sample
+        // per callback; on starvation, hold the last sample with a fast decay
+        // instead of a hard zero. One sample per callback absorbs ~4000 ppm —
+        // far beyond real-world drift.
+        let drift_high = (sr as usize) / 20; // 50 ms
+        let mut last_in = 0.0f32;
         let output_stream = out_dev.build_output_stream(
             &out_stream_cfg,
             move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                 let frames = data.len() / out_channels;
                 mono.resize(frames, 0.0);
+                if mic_cons.occupied_len() > drift_high {
+                    let _ = mic_cons.try_pop();
+                }
                 for f in 0..frames {
-                    mono[f] = mic_cons.try_pop().unwrap_or(0.0);
+                    match mic_cons.try_pop() {
+                        Some(s) => { last_in = s; mono[f] = s; }
+                        None => { last_in *= 0.995; mono[f] = last_in; }
+                    }
                 }
                 let chain = shared_out.chain.load();
                 for slot in chain.iter() {
@@ -390,6 +438,12 @@ impl AudioState {
         input_stream.play().map_err(|e| format!("Play input: {}", e))?;
         output_stream.play().map_err(|e| format!("Play output: {}", e))?;
 
+        // Only mark running once both streams are live: setting it earlier
+        // left the engine stuck in "Already running" forever when stream
+        // construction failed. (The callbacks tolerate the brief gap — input
+        // no-ops and output plays silence until this flips.)
+        shared.is_running.store(true, Ordering::Release);
+
         if is_rec {
             if let Some(p) = raw_path  { self.raw_writer  = Some(spawn_writer(p, sr, raw_cons)); }
             if let Some(p) = proc_path { self.proc_writer = Some(spawn_writer(p, sr, proc_cons)); }
@@ -406,11 +460,15 @@ impl AudioState {
         if shared.is_running.load(Ordering::Relaxed) {
             return Err("Engine already running".into());
         }
-        let (samples, meta) = file_io::read_wav(input_path)?;
+        // Mono chain — downmix multi-channel input (playback upmixes again).
+        let (samples, meta) = file_io::read_wav_mono(input_path)?;
         let chunk = 512;
         let mut processed = Vec::with_capacity(samples.len());
         let mut pos = 0;
         let chain = shared.chain.load();
+        // SAFETY: no audio stream is running (checked above). Reset so the
+        // render neither inherits live-session state nor leaves any behind.
+        for slot in chain.iter() { unsafe { slot.as_mut().reset(); } }
         while pos < samples.len() {
             let end = (pos + chunk).min(samples.len());
             let mut buf: Vec<f32> = samples[pos..end].to_vec();
@@ -422,6 +480,7 @@ impl AudioState {
             processed.extend_from_slice(&buf);
             pos = end;
         }
+        for slot in chain.iter() { unsafe { slot.as_mut().reset(); } }
 
         let host = cpal::default_host();
         let dev = host.default_output_device().ok_or("No output device")?;
@@ -438,7 +497,6 @@ impl AudioState {
         let pp = Arc::clone(&pos_idx);
         let dd = Arc::clone(&data);
         let shared_p = Arc::clone(shared);
-        shared.is_running.store(true, Ordering::Release);
 
         let stream = dev.build_output_stream(
             &stream_cfg,
@@ -459,7 +517,14 @@ impl AudioState {
             |e| log::error!("Preview error: {}", e),
             None,
         ).map_err(|e| format!("Preview stream: {}", e))?;
-        stream.play().map_err(|e| format!("Preview play: {}", e))?;
+        // Set before play(): the callback clears this flag at end-of-file, so
+        // storing it afterwards could race a very short file and wedge the
+        // engine in "running". A failed build/play leaves it false.
+        shared.is_running.store(true, Ordering::Release);
+        if let Err(e) = stream.play() {
+            shared.is_running.store(false, Ordering::Release);
+            return Err(format!("Preview play: {}", e));
+        }
         self.output = Some(stream);
         Ok(())
     }

@@ -76,7 +76,7 @@ class _VisualizerPanelState extends State<VisualizerPanel>
               right: 0,
               child: Container(
                 height: 0.5,
-                color: VoxForgeTheme.primary.withOpacity(0.15),
+                color: VoxForgeTheme.primary.withValues(alpha: 0.15),
               ),
             ),
             // Label
@@ -118,7 +118,7 @@ class _VisualizerPanelState extends State<VisualizerPanel>
                 '50Hz',
                 style: TextStyle(
                   fontSize: 8,
-                  color: VoxForgeTheme.textMuted.withOpacity(0.5),
+                  color: VoxForgeTheme.textMuted.withValues(alpha: 0.5),
                 ),
               ),
             ),
@@ -129,7 +129,7 @@ class _VisualizerPanelState extends State<VisualizerPanel>
                 '16kHz',
                 style: TextStyle(
                   fontSize: 8,
-                  color: VoxForgeTheme.textMuted.withOpacity(0.5),
+                  color: VoxForgeTheme.textMuted.withValues(alpha: 0.5),
                 ),
               ),
             ),
@@ -144,7 +144,7 @@ class _GridPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = VoxForgeTheme.border.withOpacity(0.3)
+      ..color = VoxForgeTheme.border.withValues(alpha: 0.3)
       ..strokeWidth = 0.5;
 
     // Horizontal lines

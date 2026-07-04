@@ -2,6 +2,13 @@ use crate::graph::*;
 use crate::impl_effect_meta;
 use std::f32::consts::PI;
 
+/// Chorus timing in seconds (15 ms base delay, ±7 ms sweep at full depth) so
+/// the voicing is identical at any stream rate. The buffer is sized for the
+/// maximum supported rate (192 kHz → 15+7 ms ≈ 4224 samples).
+const BASE_DELAY_S: f32 = 0.015;
+const SWEEP_S: f32 = 0.007;
+const BUF_LEN: usize = 8192;
+
 pub struct Chorus {
     pub enabled: AtomicEnabled,
     pub rate_hz: AtomicF32,
@@ -14,7 +21,7 @@ impl Chorus {
     pub fn new(rate: f32, depth: f32, mix: f32) -> Self {
         Self { enabled: AtomicEnabled::new(true),
             rate_hz: AtomicF32::new(rate), depth: AtomicF32::new(depth),
-            mix: AtomicF32::new(mix), buffer: vec![0.0; 2048],
+            mix: AtomicF32::new(mix), buffer: vec![0.0; BUF_LEN],
             write_pos: 0, lfo_phase: 0.0 }
     }
     #[inline] fn read_interp(&self, delay: f32) -> f32 {
@@ -31,8 +38,11 @@ impl AudioEffect for Chorus {
 
     fn process(&mut self, buffer: &mut [f32], sample_rate: u32) {
         if !self.enabled.get() { return; }
+        let sr = sample_rate as f32;
         let rate = self.rate_hz.get(); let depth = self.depth.get(); let mix = self.mix.get();
-        let inc = rate / sample_rate as f32;
+        let inc = rate / sr;
+        let sweep = SWEEP_S * sr;
+        let base = (BASE_DELAY_S * sr).min((BUF_LEN - 2) as f32 - sweep);
         for s in buffer.iter_mut() {
             let dry = *s;
             self.buffer[self.write_pos] = dry;
@@ -40,7 +50,7 @@ impl AudioEffect for Chorus {
             let lfo = (2.0 * PI * self.lfo_phase).sin();
             self.lfo_phase += inc;
             if self.lfo_phase >= 1.0 { self.lfo_phase -= 1.0; }
-            let wet = self.read_interp(720.0 + lfo * 336.0 * depth);
+            let wet = self.read_interp(base + lfo * sweep * depth);
             *s = dry * (1.0 - mix) + wet * mix;
         }
     }

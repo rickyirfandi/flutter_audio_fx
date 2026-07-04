@@ -42,8 +42,13 @@ impl AudioEffect for NoiseSuppression {
         "strength" => strength,
     });
 
-    fn process(&mut self, buffer: &mut [f32], _sample_rate: u32) {
+    fn process(&mut self, buffer: &mut [f32], sample_rate: u32) {
         if !self.enabled.get() { return; }
+        // RNNoise's model is trained on 48 kHz / 480-sample frames; running it
+        // at any other rate produces garbled "denoising". Pass through instead
+        // — the runtime logs a warning at startup when the negotiated rate is
+        // not 48 kHz (no logging here: this is the audio thread).
+        if sample_rate != 48000 { return; }
         let strength = self.strength.get().clamp(0.0, 1.0);
 
         // Stack scratch — no heap allocation on the audio thread.

@@ -56,6 +56,26 @@ pub fn read_wav(path: &str) -> Result<(Vec<f32>, AudioFileMeta), String> {
     Ok((samples, meta))
 }
 
+/// Read a WAV file downmixed to mono (channels averaged per frame).
+///
+/// The returned `AudioFileMeta` describes the *source* file, so `channels`
+/// reflects the original channel count even though the samples are mono.
+pub fn read_wav_mono(path: &str) -> Result<(Vec<f32>, AudioFileMeta), String> {
+    let (samples, meta) = read_wav(path)?;
+    if meta.channels <= 1 {
+        return Ok((samples, meta));
+    }
+    let ch = meta.channels as usize;
+    let frames = samples.len() / ch;
+    let mut mono = Vec::with_capacity(frames);
+    for f in 0..frames {
+        let mut acc = 0.0f32;
+        for c in 0..ch { acc += samples[f * ch + c]; }
+        mono.push(acc / ch as f32);
+    }
+    Ok((mono, meta))
+}
+
 /// Write samples to a WAV file (16-bit PCM)
 pub fn write_wav(path: &str, samples: &[f32], sample_rate: u32, channels: u16) -> Result<(), String> {
     let spec = hound::WavSpec {

@@ -76,8 +76,13 @@ await engine.processFile(
   inputPath: 'recording.wav',
   outputPath: 'processed.wav',
   format: AudioFormat.wav(),
+  onProgress: (p) => print('${(p * 100).toStringAsFixed(0)}%'),
 );
 ```
+
+Processing runs on a worker isolate, so the UI stays responsive; `onProgress`
+reports real progress. Multi-channel input is downmixed to mono (the effect
+chain is mono) and the output is written as mono WAV.
 
 > MP3 export is reserved for a future release. Calling `processFile` with
 > `AudioFormat.mp3()` throws `UnsupportedError`.

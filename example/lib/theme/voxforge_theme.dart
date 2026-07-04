@@ -78,7 +78,7 @@ abstract final class VoxForgeTheme {
           activeTrackColor: primary,
           inactiveTrackColor: bgSurface,
           thumbColor: primary,
-          overlayColor: primary.withOpacity(0.1),
+          overlayColor: primary.withValues(alpha: 0.1),
           trackHeight: 3,
           thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
         ),
@@ -89,7 +89,7 @@ abstract final class VoxForgeTheme {
           }),
           trackColor: WidgetStateProperty.resolveWith((states) {
             if (states.contains(WidgetState.selected)) {
-              return primary.withOpacity(0.3);
+              return primary.withValues(alpha: 0.3);
             }
             return bgSurface;
           }),

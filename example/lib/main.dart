@@ -69,7 +69,7 @@ class _PermissionGateState extends State<_PermissionGate> {
               fontWeight: FontWeight.w900, letterSpacing: 4, color: VoxForgeTheme.primary)),
           ),
           const SizedBox(height: 32),
-          Icon(Icons.mic_off, size: 56, color: VoxForgeTheme.textMuted.withOpacity(0.4)),
+          Icon(Icons.mic_off, size: 56, color: VoxForgeTheme.textMuted.withValues(alpha: 0.4)),
           const SizedBox(height: 20),
           const Text('Microphone Access Required',
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),

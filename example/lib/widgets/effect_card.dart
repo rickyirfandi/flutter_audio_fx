@@ -50,11 +50,11 @@ class _EffectCardState extends State<EffectCard> {
     return AnimatedContainer(
       duration: const Duration(milliseconds: 200),
       decoration: BoxDecoration(
-        color: isOn ? VoxForgeTheme.bgCard : VoxForgeTheme.bgCard.withOpacity(0.5),
+        color: isOn ? VoxForgeTheme.bgCard : VoxForgeTheme.bgCard.withValues(alpha: 0.5),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
           color: isOn
-              ? VoxForgeTheme.primary.withOpacity(0.2)
+              ? VoxForgeTheme.primary.withValues(alpha: 0.2)
               : VoxForgeTheme.border,
           width: 0.5,
         ),

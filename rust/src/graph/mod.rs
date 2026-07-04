@@ -1,9 +1,11 @@
 use std::cell::UnsafeCell;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use ringbuf::{HeapRb, HeapProd, HeapCons};
 use ringbuf::traits::{Producer, Consumer, Split};
+
+use crate::effects::auto_tune::DetectShared;
 
 /// Trait that all audio effects must implement.
 /// `process` is called on the real-time audio thread — it MUST NOT allocate,
@@ -45,8 +47,11 @@ struct ParamMsg {
 ///     pushed onto a lock-free SPSC queue and applied by the audio thread at
 ///     the top of `process_in_place`. Static metadata (`effect_type`,
 ///     `latency`) is cached at construction.
-///   * Chain edits replace the whole `Arc<Vec<EffectSlot>>` via `ArcSwap`, so
-///     the audio thread never sees a partially-mutated chain.
+///   * Chain edits replace the whole `Arc<Vec<Arc<EffectSlot>>>` via
+///     `ArcSwap`, so the audio thread never sees a partially-mutated chain.
+///     Individual slots may be carried over (`Arc`-cloned) into the new chain
+///     to preserve DSP state; that is sound because the control plane still
+///     only touches the slot's atomics and param queue — never the effect.
 /// This removes the `&mut`/`&` cross-thread aliasing that a direct `view()`
 /// would create.
 pub struct EffectSlot {
@@ -59,6 +64,9 @@ pub struct EffectSlot {
     param_tx: Mutex<HeapProd<ParamMsg>>,
     /// Audio thread is the sole consumer.
     param_rx: UnsafeCell<HeapCons<ParamMsg>>,
+    /// AutoTune's pitch-detector mailbox, cached at construction so the
+    /// runtime can rewire the detector worker without touching the effect.
+    detect: Option<Arc<DetectShared>>,
 }
 
 // SAFETY: `cell` and `param_rx` are only ever accessed by the single audio
@@ -68,6 +76,10 @@ unsafe impl Sync for EffectSlot {}
 
 impl EffectSlot {
     pub fn new(fx: Box<dyn AudioEffect>) -> Self {
+        Self::with_detect(fx, None)
+    }
+
+    pub fn with_detect(fx: Box<dyn AudioEffect>, detect: Option<Arc<DetectShared>>) -> Self {
         let enabled = AtomicBool::new(fx.is_enabled());
         let effect_type = fx.effect_type();
         let latency = fx.latency_samples();
@@ -79,8 +91,11 @@ impl EffectSlot {
             latency,
             param_tx: Mutex::new(tx),
             param_rx: UnsafeCell::new(rx),
+            detect,
         }
     }
+
+    pub fn detect_shared(&self) -> Option<Arc<DetectShared>> { self.detect.clone() }
 
     #[inline] pub fn is_enabled(&self) -> bool { self.enabled.load(Ordering::Relaxed) }
     #[inline] pub fn set_enabled(&self, enabled: bool) { self.enabled.store(enabled, Ordering::Relaxed); }

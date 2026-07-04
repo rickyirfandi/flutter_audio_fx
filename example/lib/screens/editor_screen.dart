@@ -24,7 +24,6 @@ class EditorScreen extends StatefulWidget {
 class _EditorScreenState extends State<EditorScreen> {
   late final AppController _ctrl;
   bool _abCompare = false;
-  bool _isPlaying = false;
   List<bool>? _savedEnabledStates;
 
   @override
@@ -66,12 +65,13 @@ class _EditorScreenState extends State<EditorScreen> {
     }
   }
 
+  // The controller is the source of truth for the play state: it resets
+  // itself when preview playback reaches the end of the file.
   void _togglePlayback() {
-    setState(() => _isPlaying = !_isPlaying);
-    if (_isPlaying) {
-      _ctrl.startPlayback(widget.project);
-    } else {
+    if (_ctrl.isPlaying) {
       _ctrl.stopPlayback();
+    } else {
+      _ctrl.startPlayback(widget.project);
     }
   }
 
@@ -128,7 +128,7 @@ class _EditorScreenState extends State<EditorScreen> {
             padding: const EdgeInsets.symmetric(horizontal: Spacing.md),
             child: VisualizerPanel(
               engine: _ctrl.engine,
-              isActive: _isPlaying,
+              isActive: _ctrl.isPlaying,
             ),
           ),
           const SizedBox(height: Spacing.sm),
@@ -141,8 +141,8 @@ class _EditorScreenState extends State<EditorScreen> {
               children: [
                 // Play/stop
                 _ControlButton(
-                  icon: _isPlaying ? Icons.stop : Icons.play_arrow,
-                  label: _isPlaying ? 'Stop' : 'Preview',
+                  icon: _ctrl.isPlaying ? Icons.stop : Icons.play_arrow,
+                  label: _ctrl.isPlaying ? 'Stop' : 'Preview',
                   color: VoxForgeTheme.primary,
                   onTap: _togglePlayback,
                 ),
@@ -218,7 +218,7 @@ class _EditorScreenState extends State<EditorScreen> {
                       return Material(
                         color: Colors.transparent,
                         elevation: 4,
-                        shadowColor: VoxForgeTheme.primary.withOpacity(0.2),
+                        shadowColor: VoxForgeTheme.primary.withValues(alpha: 0.2),
                         borderRadius: BorderRadius.circular(14),
                         child: child,
                       );
@@ -258,7 +258,7 @@ class _EditorScreenState extends State<EditorScreen> {
                 style: OutlinedButton.styleFrom(
                   foregroundColor: VoxForgeTheme.primary,
                   side: BorderSide(
-                    color: VoxForgeTheme.primary.withOpacity(0.3),
+                    color: VoxForgeTheme.primary.withValues(alpha: 0.3),
                   ),
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   shape: RoundedRectangleBorder(
@@ -279,7 +279,7 @@ class _EditorScreenState extends State<EditorScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(Icons.auto_fix_high,
-              size: 48, color: VoxForgeTheme.textMuted.withOpacity(0.3)),
+              size: 48, color: VoxForgeTheme.textMuted.withValues(alpha: 0.3)),
           const SizedBox(height: 12),
           const Text(
             'No effects in chain',
@@ -316,9 +316,9 @@ class _ControlButton extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.1),
+          color: color.withValues(alpha: 0.1),
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: color.withOpacity(0.3), width: 0.5),
+          border: Border.all(color: color.withValues(alpha: 0.3), width: 0.5),
         ),
         child: Row(
           children: [

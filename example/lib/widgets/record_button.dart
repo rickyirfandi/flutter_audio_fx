@@ -34,7 +34,7 @@ class RecordButton extends StatelessWidget {
                     shape: BoxShape.circle,
                     border: Border.all(
                       color: VoxForgeTheme.danger
-                          .withOpacity(0.3 - pulseAnimation.value * 0.25),
+                          .withValues(alpha: 0.3 - pulseAnimation.value * 0.25),
                       width: 2,
                     ),
                   ),
@@ -48,7 +48,7 @@ class RecordButton extends StatelessWidget {
                 shape: BoxShape.circle,
                 border: Border.all(
                   color: isRecording
-                      ? VoxForgeTheme.danger.withOpacity(0.4)
+                      ? VoxForgeTheme.danger.withValues(alpha: 0.4)
                       : VoxForgeTheme.border,
                   width: 3,
                 ),
@@ -65,7 +65,7 @@ class RecordButton extends StatelessWidget {
                     BorderRadius.circular(isRecording ? 8 : 34),
                 boxShadow: [
                   BoxShadow(
-                    color: VoxForgeTheme.danger.withOpacity(isRecording ? 0.5 : 0.2),
+                    color: VoxForgeTheme.danger.withValues(alpha: isRecording ? 0.5 : 0.2),
                     blurRadius: isRecording ? 24 : 8,
                   ),
                 ],

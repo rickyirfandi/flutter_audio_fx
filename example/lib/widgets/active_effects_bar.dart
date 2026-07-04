@@ -49,12 +49,12 @@ class ActiveEffectsBar extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
                 color: isOn
-                    ? VoxForgeTheme.primary.withOpacity(0.12)
+                    ? VoxForgeTheme.primary.withValues(alpha: 0.12)
                     : VoxForgeTheme.bgCard,
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
                   color: isOn
-                      ? VoxForgeTheme.primary.withOpacity(0.4)
+                      ? VoxForgeTheme.primary.withValues(alpha: 0.4)
                       : VoxForgeTheme.border,
                   width: 0.5,
                 ),

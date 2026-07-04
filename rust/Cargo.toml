@@ -35,7 +35,14 @@ panic = "abort"
 
 [profile.dev]
 opt-level = 1
+# A panic unwinding across the C ABI is UB; abort instead (release already
+# does). Cargo ignores this for test targets, so `cargo test` still works.
+panic = "abort"
 
 [[test]]
 name = "effects"
 path = "tests/effects.rs"
+
+[[test]]
+name = "api"
+path = "tests/api.rs"

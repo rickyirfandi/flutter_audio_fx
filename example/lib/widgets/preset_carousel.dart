@@ -34,7 +34,7 @@ class PresetCarousel extends StatelessWidget {
               width: 78,
               decoration: BoxDecoration(
                 color: isActive
-                    ? VoxForgeTheme.primary.withOpacity(0.1)
+                    ? VoxForgeTheme.primary.withValues(alpha: 0.1)
                     : VoxForgeTheme.bgCard,
                 borderRadius: BorderRadius.circular(14),
                 border: Border.all(

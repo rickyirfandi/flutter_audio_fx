@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_audio_fx/flutter_audio_fx.dart';
 import 'package:share_plus/share_plus.dart';
@@ -30,10 +29,13 @@ class _ExportScreenState extends State<ExportScreen> {
     widget.controller.addListener(_refresh);
   }
 
-  void _refresh() { if (mounted) setState(() {
-    _exporting = widget.controller.isExporting;
-    _progress = widget.controller.exportProgress;
-  }); }
+  void _refresh() {
+    if (!mounted) return;
+    setState(() {
+      _exporting = widget.controller.isExporting;
+      _progress = widget.controller.exportProgress;
+    });
+  }
 
   @override
   void dispose() {
@@ -55,6 +57,11 @@ class _ExportScreenState extends State<ExportScreen> {
       _done = result != null;
       _exportedPath = result;
     });
+    if (result == null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(widget.controller.lastError ?? 'Export failed'),
+      ));
+    }
   }
 
   Future<void> _share() async {
@@ -116,7 +123,7 @@ class _ExportScreenState extends State<ExportScreen> {
                   margin: EdgeInsets.only(right: br == 320 ? 0 : 8),
                   padding: const EdgeInsets.symmetric(vertical: 12),
                   decoration: BoxDecoration(
-                    color: sel ? VoxForgeTheme.primary.withOpacity(0.1) : VoxForgeTheme.bgCard,
+                    color: sel ? VoxForgeTheme.primary.withValues(alpha: 0.1) : VoxForgeTheme.bgCard,
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(color: sel ? VoxForgeTheme.primary : VoxForgeTheme.border,
                       width: sel ? 1.5 : 0.5)),
@@ -159,7 +166,7 @@ class _ExportScreenState extends State<ExportScreen> {
               label: const Text('SHARE', style: TextStyle(fontWeight: FontWeight.w700, letterSpacing: 1.5)),
               style: OutlinedButton.styleFrom(
                 foregroundColor: VoxForgeTheme.primary,
-                side: BorderSide(color: VoxForgeTheme.primary.withOpacity(0.3)),
+                side: BorderSide(color: VoxForgeTheme.primary.withValues(alpha: 0.3)),
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
             )),
@@ -177,7 +184,7 @@ class _ExportScreenState extends State<ExportScreen> {
     return Expanded(child: GestureDetector(onTap: onTap, child: AnimatedContainer(
       duration: const Duration(milliseconds: 200), padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: sel ? VoxForgeTheme.primary.withOpacity(0.08) : VoxForgeTheme.bgCard,
+        color: sel ? VoxForgeTheme.primary.withValues(alpha: 0.08) : VoxForgeTheme.bgCard,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: sel ? VoxForgeTheme.primary : VoxForgeTheme.border,
           width: sel ? 1.5 : 0.5)),
@@ -213,8 +220,8 @@ class _ExportScreenState extends State<ExportScreen> {
   Widget _doneWidget() => Container(
     width: double.infinity, padding: const EdgeInsets.all(20),
     decoration: BoxDecoration(
-      color: VoxForgeTheme.success.withOpacity(0.08), borderRadius: BorderRadius.circular(14),
-      border: Border.all(color: VoxForgeTheme.success.withOpacity(0.3))),
+      color: VoxForgeTheme.success.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: VoxForgeTheme.success.withValues(alpha: 0.3))),
     child: Column(children: [
       const Icon(Icons.check_circle, color: VoxForgeTheme.success, size: 40),
       const SizedBox(height: 10),

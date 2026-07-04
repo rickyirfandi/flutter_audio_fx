@@ -60,10 +60,10 @@ class ModeToggle extends StatelessWidget {
           curve: Curves.easeOut,
           padding: const EdgeInsets.symmetric(vertical: 10),
           decoration: BoxDecoration(
-            color: isActive ? VoxForgeTheme.primary.withOpacity(0.12) : Colors.transparent,
+            color: isActive ? VoxForgeTheme.primary.withValues(alpha: 0.12) : Colors.transparent,
             borderRadius: BorderRadius.circular(9),
             border: isActive
-                ? Border.all(color: VoxForgeTheme.primary.withOpacity(0.3), width: 0.5)
+                ? Border.all(color: VoxForgeTheme.primary.withValues(alpha: 0.3), width: 0.5)
                 : null,
           ),
           child: Row(

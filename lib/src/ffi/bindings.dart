@@ -30,8 +30,13 @@ final DynamicLibrary _lib = _open();
 
 final bool Function(int sampleRate, int bufferSize) fxEngineInit = _lib
     .lookupFunction<Bool Function(Uint32, Uint32), bool Function(int, int)>(
-        'fx_engine_init',
-        isLeaf: true);
+        'fx_engine_init');
+
+/// Copies the most recent native error message into [out] (capacity [cap]
+/// bytes, NUL-terminated). Returns the number of bytes written.
+final int Function(Pointer<Utf8> out, int cap) fxLastErrorMessage = _lib
+    .lookupFunction<Uint32 Function(Pointer<Utf8>, Uint32),
+        int Function(Pointer<Utf8>, int)>('fx_last_error_message');
 
 final bool Function() fxEngineIsRunning = _lib
     .lookupFunction<Bool Function(), bool Function()>('fx_engine_is_running',
@@ -67,6 +72,13 @@ final int Function(Pointer<Utf8>, Pointer<Utf8>) fxEngineProcessFile = _lib
 final int Function(Pointer<Utf8>) fxEnginePreviewFile = _lib
     .lookupFunction<Int32 Function(Pointer<Utf8>),
         int Function(Pointer<Utf8>)>('fx_engine_preview_file');
+
+/// Progress (0.0..=1.0) of an in-flight `fx_engine_process_file` call running
+/// on another isolate/thread.
+final double Function() fxProcessFileProgress = _lib
+    .lookupFunction<Float Function(), double Function()>(
+        'fx_process_file_progress',
+        isLeaf: true);
 
 // ─── Chain editing ───
 
