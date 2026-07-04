@@ -1,25 +1,65 @@
 name: Build native cores
 
+# Builds the Rust core for every platform and commits the binaries into the
+# repo (ironpress-style), so package consumers just `pub get` and run — no
+# Rust toolchain required. Full builds run on version tags and manual
+# dispatch; pushes/PRs to master run the test jobs only. The bot commit lands
+# on the default branch and does not re-trigger a build (tags/dispatch only).
+
 on:
   push:
-    branches: [main]
+    branches: [master]
     tags: ['v*']
   pull_request:
-    branches: [main]
+    branches: [master]
   workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
   RUST_VERSION: "1.85.0"
+  FLUTTER_VERSION: "3.29.0"
 
 defaults:
   run:
     shell: bash
 
+concurrency:
+  group: build-native-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  # ─────────────────────────── Tests (every trigger) ───────────────────────
+  test-rust:
+    name: cargo test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: |
+          rustup toolchain install ${{ env.RUST_VERSION }}
+          rustup default ${{ env.RUST_VERSION }}
+      - name: ALSA dev headers (cpal dependency)
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - working-directory: rust
+        run: cargo test --release
+
+  test-dart:
+    name: flutter test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+      - run: flutter pub get
+      - run: flutter analyze lib test
+      - run: flutter test
+
   # ─────────────────────────── Android ───────────────────────────
-  android:
+  build-android:
     name: Android (arm64 / armv7 / x86_64)
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -54,21 +94,16 @@ jobs:
             -o ../android/src/main/jniLibs \
             build --release
 
-      - name: Stage artifact
-        run: |
-          mkdir -p artifact/android/src/main/jniLibs
-          cp -R android/src/main/jniLibs/* artifact/android/src/main/jniLibs/
-          (cd artifact && zip -r ../flutter_audio_fx_android.zip android)
-
       - uses: actions/upload-artifact@v4
         with:
-          name: flutter_audio_fx_android
-          path: flutter_audio_fx_android.zip
+          name: native-android
+          path: android/src/main/jniLibs/
           if-no-files-found: error
 
   # ──────────────────────────── iOS ──────────────────────────────
-  ios:
+  build-ios:
     name: iOS xcframework (device + simulator)
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -84,52 +119,39 @@ jobs:
 
       - name: Build static libs for each iOS target
         working-directory: rust
+        env:
+          IPHONEOS_DEPLOYMENT_TARGET: "13.0"
         run: |
           cargo build --release --target aarch64-apple-ios
           cargo build --release --target aarch64-apple-ios-sim
           cargo build --release --target x86_64-apple-ios
 
-      - name: lipo Apple Silicon + Intel simulator slices
-        working-directory: rust
+      - name: Assemble xcframework + legacy universal .a
         run: |
-          mkdir -p ../ios/build/sim
+          mkdir -p stage/ios build/sim
           lipo -create \
-            target/aarch64-apple-ios-sim/release/libflutter_audio_fx_core.a \
-            target/x86_64-apple-ios/release/libflutter_audio_fx_core.a \
-            -output ../ios/build/sim/libflutter_audio_fx_core.a
-
-      - name: Build xcframework
-        run: |
-          rm -rf ios/flutter_audio_fx_core.xcframework
+            rust/target/aarch64-apple-ios-sim/release/libflutter_audio_fx_core.a \
+            rust/target/x86_64-apple-ios/release/libflutter_audio_fx_core.a \
+            -output build/sim/libflutter_audio_fx_core.a
           xcodebuild -create-xcframework \
             -library rust/target/aarch64-apple-ios/release/libflutter_audio_fx_core.a \
-            -library ios/build/sim/libflutter_audio_fx_core.a \
-            -output ios/flutter_audio_fx_core.xcframework
-
-      - name: Also keep a lipo'd device+sim universal .a (legacy podspec)
-        working-directory: rust
-        run: |
+            -library build/sim/libflutter_audio_fx_core.a \
+            -output stage/ios/flutter_audio_fx_core.xcframework
           lipo -create \
-            target/aarch64-apple-ios/release/libflutter_audio_fx_core.a \
-            ../ios/build/sim/libflutter_audio_fx_core.a \
-            -output ../ios/libflutter_audio_fx_core.a
-
-      - name: Stage artifact
-        run: |
-          mkdir -p artifact/ios
-          cp -R ios/flutter_audio_fx_core.xcframework artifact/ios/
-          cp ios/libflutter_audio_fx_core.a artifact/ios/
-          (cd artifact && zip -r ../flutter_audio_fx_ios.zip ios)
+            rust/target/aarch64-apple-ios/release/libflutter_audio_fx_core.a \
+            build/sim/libflutter_audio_fx_core.a \
+            -output stage/ios/libflutter_audio_fx_core.a
 
       - uses: actions/upload-artifact@v4
         with:
-          name: flutter_audio_fx_ios
-          path: flutter_audio_fx_ios.zip
+          name: native-ios
+          path: stage/ios/
           if-no-files-found: error
 
   # ─────────────────────────── macOS ─────────────────────────────
-  macos:
+  build-macos:
     name: macOS universal (arm64 + x86_64)
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -142,35 +164,27 @@ jobs:
             aarch64-apple-darwin \
             x86_64-apple-darwin
 
-      - name: Build static libs for each macOS arch
+      - name: Build + lipo universal .a
         working-directory: rust
         run: |
           cargo build --release --target aarch64-apple-darwin
           cargo build --release --target x86_64-apple-darwin
-
-      - name: lipo into universal .a
-        working-directory: rust
-        run: |
+          mkdir -p ../stage/macos
           lipo -create \
             target/aarch64-apple-darwin/release/libflutter_audio_fx_core.a \
             target/x86_64-apple-darwin/release/libflutter_audio_fx_core.a \
-            -output ../macos/libflutter_audio_fx_core.a
-
-      - name: Stage artifact
-        run: |
-          mkdir -p artifact/macos
-          cp macos/libflutter_audio_fx_core.a artifact/macos/
-          (cd artifact && zip -r ../flutter_audio_fx_macos.zip macos)
+            -output ../stage/macos/libflutter_audio_fx_core.a
 
       - uses: actions/upload-artifact@v4
         with:
-          name: flutter_audio_fx_macos
-          path: flutter_audio_fx_macos.zip
+          name: native-macos
+          path: stage/macos/
           if-no-files-found: error
 
   # ─────────────────────────── Linux ─────────────────────────────
-  linux:
+  build-linux:
     name: Linux x86_64
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -180,30 +194,23 @@ jobs:
           rustup toolchain install ${{ env.RUST_VERSION }}
           rustup default ${{ env.RUST_VERSION }}
 
-      - name: Install ALSA dev headers (cpal dependency)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libasound2-dev pkg-config
+      - name: ALSA dev headers (cpal dependency)
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
 
       - name: Build
         working-directory: rust
         run: cargo build --release
 
-      - name: Stage artifact
-        run: |
-          mkdir -p artifact/linux
-          cp rust/target/release/libflutter_audio_fx_core.so artifact/linux/
-          (cd artifact && zip -r ../flutter_audio_fx_linux.zip linux)
-
       - uses: actions/upload-artifact@v4
         with:
-          name: flutter_audio_fx_linux
-          path: flutter_audio_fx_linux.zip
+          name: native-linux
+          path: rust/target/release/libflutter_audio_fx_core.so
           if-no-files-found: error
 
   # ────────────────────────── Windows ────────────────────────────
-  windows:
+  build-windows:
     name: Windows x86_64
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -217,75 +224,112 @@ jobs:
         working-directory: rust
         run: cargo build --release
 
-      - name: Stage artifact
-        run: |
-          mkdir -p artifact/windows
-          cp rust/target/release/flutter_audio_fx_core.dll artifact/windows/
-          cp rust/target/release/flutter_audio_fx_core.dll.lib artifact/windows/ || true
-          (cd artifact && 7z a ../flutter_audio_fx_windows.zip windows)
-
       - uses: actions/upload-artifact@v4
         with:
-          name: flutter_audio_fx_windows
-          path: flutter_audio_fx_windows.zip
+          name: native-windows
+          path: rust/target/release/flutter_audio_fx_core.dll
           if-no-files-found: error
 
-  # ─────────────────────────── Tests ─────────────────────────────
-  test-rust:
-    name: cargo test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Rust
-        run: |
-          rustup toolchain install ${{ env.RUST_VERSION }}
-          rustup default ${{ env.RUST_VERSION }}
-      - name: ALSA dev headers
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
-      - working-directory: rust
-        run: cargo test --release
-
-  test-dart:
-    name: flutter test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.19.x'
-          channel: stable
-      - run: flutter pub get
-      - run: flutter analyze lib test
-      - run: flutter test
-
-  # ─────────── On tag push: bundle everything into a release ─────────
-  release:
-    name: Publish release bundle
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [android, ios, macos, linux, windows, test-rust, test-dart]
+  # ── Assemble, validate, and commit binaries back to the repo ──
+  package:
+    name: Commit precompiled binaries
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: [build-android, build-ios, build-macos, build-linux, build-windows, test-rust, test-dart]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: dist
+          path: artifacts
 
-      - name: Build single drop-in bundle
+      - name: Assemble binaries into plugin folders
         run: |
-          mkdir bundle
-          for z in dist/*/*.zip; do
-            unzip -o "$z" -d bundle
-          done
-          (cd bundle && zip -r ../flutter_audio_fx_native_${{ github.ref_name }}.zip .)
+          # Android: cargo-ndk already laid out <abi>/libflutter_audio_fx_core.so
+          mkdir -p android/src/main/jniLibs
+          cp -R artifacts/native-android/* android/src/main/jniLibs/
+
+          # iOS: xcframework (preferred by podspec) + legacy universal .a
+          rm -rf ios/flutter_audio_fx_core.xcframework
+          cp -R artifacts/native-ios/flutter_audio_fx_core.xcframework ios/
+          cp artifacts/native-ios/libflutter_audio_fx_core.a ios/
+
+          # macOS: universal static lib (podspec vendored_libraries)
+          cp artifacts/native-macos/libflutter_audio_fx_core.a macos/
+
+          # Linux: prebuilt .so picked up by linux/CMakeLists.txt
+          cp artifacts/native-linux/libflutter_audio_fx_core.so linux/
+
+          # Windows: prebuilt .dll picked up by windows/CMakeLists.txt
+          cp artifacts/native-windows/flutter_audio_fx_core.dll windows/
+
+      - name: Verify structure
+        run: |
+          echo "=== Android ===" && find android/src/main/jniLibs -type f | sort
+          echo "=== iOS ==="     && find ios/flutter_audio_fx_core.xcframework -maxdepth 2 && ls -lh ios/libflutter_audio_fx_core.a
+          echo "=== macOS ==="   && ls -lh macos/libflutter_audio_fx_core.a
+          echo "=== Linux ==="   && ls -lh linux/libflutter_audio_fx_core.so
+          echo "=== Windows ===" && ls -lh windows/flutter_audio_fx_core.dll
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+
+      - name: Validate package
+        run: |
+          flutter pub get
+          flutter analyze lib test
+          flutter test
+          flutter pub publish --dry-run
+
+      - name: Commit precompiled binaries
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add -f \
+            android/src/main/jniLibs/ \
+            ios/flutter_audio_fx_core.xcframework/ \
+            ios/libflutter_audio_fx_core.a \
+            macos/libflutter_audio_fx_core.a \
+            linux/libflutter_audio_fx_core.so \
+            windows/flutter_audio_fx_core.dll
+
+          if git diff --cached --quiet; then
+            echo "No changes — binaries are already up to date."
+          else
+            git commit -m "chore: update precompiled native binaries
+
+          Built from ${GITHUB_SHA::8} via CI (${{ github.ref_name }}).
+          Platforms: Android (arm64-v8a, armeabi-v7a, x86_64), iOS
+          (xcframework + universal .a), macOS (universal .a), Linux (x64),
+          Windows (x64)."
+            git push origin HEAD:${{ github.event.repository.default_branch }}
+            echo "Precompiled binaries committed and pushed."
+          fi
+
+      # ── On tags: attach per-platform zips to a GitHub Release ──
+      - name: Zip per-platform bundles for release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          mkdir -p dist
+          zip -r dist/flutter_audio_fx_android.zip android/src/main/jniLibs
+          zip -r dist/flutter_audio_fx_ios.zip ios/flutter_audio_fx_core.xcframework ios/libflutter_audio_fx_core.a
+          zip -r dist/flutter_audio_fx_macos.zip macos/libflutter_audio_fx_core.a
+          zip -r dist/flutter_audio_fx_linux.zip linux/libflutter_audio_fx_core.so
+          zip -r dist/flutter_audio_fx_windows.zip windows/flutter_audio_fx_core.dll
 
       - name: Create / update GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/*/*.zip
-            flutter_audio_fx_native_${{ github.ref_name }}.zip
+          files: dist/*.zip
           generate_release_notes: true

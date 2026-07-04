@@ -23,6 +23,20 @@ parameter updates.
 - **Tap recording** — write raw mic input and/or processed output to WAV
   while the live chain is running, on a worker thread.
 
+## Installation
+
+Precompiled native binaries for all five platforms are committed to this repo
+by CI (built on every version tag), so **no Rust toolchain is needed** — add
+the dependency, `flutter pub get`, and run:
+
+```yaml
+dependencies:
+  flutter_audio_fx:
+    git:
+      url: https://github.com/rickyirfandi/flutter_audio_fx.git
+      ref: master # or a version tag, e.g. v0.2.0
+```
+
 ## Quick start
 
 ```dart
@@ -109,8 +123,15 @@ PitchIndicator(
 
 ## Building the native core
 
-The native engine is a Rust crate at `rust/`. Use the Makefile to build the
-artefacts and place them where each platform expects:
+**Package consumers don't need any of this.** Precompiled binaries for every
+platform (Android arm64-v8a / armeabi-v7a / x86_64, iOS xcframework, macOS
+universal, Linux x64, Windows x64) are built by CI on every version tag and
+committed into the repo — `flutter pub get` and run, no Rust toolchain
+required.
+
+For contributors working on the Rust core: the engine is a crate at `rust/`.
+Use the Makefile to build the artefacts and place them where each platform
+expects:
 
 ```bash
 make android   # → android/src/main/jniLibs/<abi>/libflutter_audio_fx_core.so

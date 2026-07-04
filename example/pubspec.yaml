@@ -3,7 +3,7 @@ description: Audio recording app with real-time DSP effects powered by Rust.
 publish_to: 'none'
 
 environment:
-  sdk: ">=3.3.0 <4.0.0"
+  sdk: ">=3.6.0 <4.0.0"
 
 dependencies:
   flutter:

@@ -4,6 +4,17 @@
 
 ### Changed
 
+- **Precompiled binaries are committed to the repo by CI.** The
+  `build-native` workflow now builds all five platforms on version tags (and
+  manual dispatch), validates the package, and auto-commits the binaries to
+  the default branch — consumers `pub get` and run with no Rust toolchain.
+  Pushes/PRs run the Rust + Dart test jobs. (The old workflow's triggers
+  pointed at a `main` branch that doesn't exist and only uploaded release
+  zips.)
+- Minimum Flutter is now 3.27 (Dart 3.6) — the widgets use
+  `Color.withValues`, which older Flutters don't have; the old 3.19
+  constraint could never have compiled.
+
 - **Chain edits preserve effect state.** Slots are now `Arc`-shared and reused
   across `fx_chain_commit` when the effect type matches, so adding/removing/
   reordering effects no longer cuts reverb tails, resets delay lines, or
