@@ -18,7 +18,7 @@ The workflow runs automatically on:
 | Artifact                       | Contents                                                                |
 |--------------------------------|-------------------------------------------------------------------------|
 | `flutter_audio_fx_android.zip` | `android/src/main/jniLibs/{arm64-v8a,armeabi-v7a,x86_64}/libflutter_audio_fx_core.so` |
-| `flutter_audio_fx_ios.zip`     | `ios/flutter_audio_fx_core.xcframework/` and a legacy `ios/libflutter_audio_fx_core.a` |
+| `flutter_audio_fx_ios.zip`     | `ios/flutter_audio_fx_core.xcframework/` and a legacy device-only `ios/libflutter_audio_fx_core.a` |
 | `flutter_audio_fx_macos.zip`   | `macos/libflutter_audio_fx_core.a` (universal arm64 + x86_64)           |
 | `flutter_audio_fx_linux.zip`   | `linux/libflutter_audio_fx_core.so`                                     |
 | `flutter_audio_fx_windows.zip` | `windows/flutter_audio_fx_core.dll` (and import library)                |

@@ -7,7 +7,7 @@ Pod::Spec.new do |s|
     equalizer, reverb and more) implemented in Rust and exposed to Flutter
     via dart:ffi.
   DESC
-  s.homepage         = 'https://github.com/flutter_audio_fx/flutter_audio_fx'
+  s.homepage         = 'https://github.com/rickyirfandi/flutter_audio_fx'
   s.license          = { :file => '../LICENSE' }
   s.author           = { 'flutter_audio_fx authors' => 'noreply@flutter_audio_fx.dev' }
   s.source           = { :path => '.' }

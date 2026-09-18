@@ -3,7 +3,7 @@ Pod::Spec.new do |s|
   s.version          = '0.3.0'
   s.summary          = 'High-performance real-time audio DSP for Flutter (Rust core).'
   s.description      = 'Real-time audio effects implemented in Rust, exposed via dart:ffi.'
-  s.homepage         = 'https://github.com/flutter_audio_fx/flutter_audio_fx'
+  s.homepage         = 'https://github.com/rickyirfandi/flutter_audio_fx'
   s.license          = { :file => '../LICENSE' }
   s.author           = { 'flutter_audio_fx authors' => 'noreply@flutter_audio_fx.dev' }
   s.source           = { :path => '.' }

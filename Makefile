@@ -16,13 +16,24 @@ android:
 		$(foreach t,$(ANDROID_TARGETS),-t $(t)) \
 		-o ../$(ANDROID_OUT) build --release
 
+# Device arm64 and simulator arm64 can't share a fat .a, so iOS ships as an
+# xcframework (plus a device-only .a fallback), matching CI.
 ios:
 	cd $(CARGO_DIR) && cargo build --release --target aarch64-apple-ios
 	cd $(CARGO_DIR) && cargo build --release --target aarch64-apple-ios-sim
+	cd $(CARGO_DIR) && cargo build --release --target x86_64-apple-ios
+	mkdir -p build/ios-sim
 	lipo -create \
-	  $(CARGO_DIR)/target/aarch64-apple-ios/release/libflutter_audio_fx_core.a \
 	  $(CARGO_DIR)/target/aarch64-apple-ios-sim/release/libflutter_audio_fx_core.a \
-	  -output $(IOS_OUT)/libflutter_audio_fx_core.a
+	  $(CARGO_DIR)/target/x86_64-apple-ios/release/libflutter_audio_fx_core.a \
+	  -output build/ios-sim/libflutter_audio_fx_core.a
+	rm -rf $(IOS_OUT)/flutter_audio_fx_core.xcframework
+	xcodebuild -create-xcframework \
+	  -library $(CARGO_DIR)/target/aarch64-apple-ios/release/libflutter_audio_fx_core.a \
+	  -library build/ios-sim/libflutter_audio_fx_core.a \
+	  -output $(IOS_OUT)/flutter_audio_fx_core.xcframework
+	cp $(CARGO_DIR)/target/aarch64-apple-ios/release/libflutter_audio_fx_core.a \
+	  $(IOS_OUT)/libflutter_audio_fx_core.a
 
 macos:
 	cd $(CARGO_DIR) && cargo build --release --target aarch64-apple-darwin
