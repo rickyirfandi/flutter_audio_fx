@@ -12,16 +12,16 @@ const BUF_LEN: usize = 8192;
 pub struct Chorus {
     pub enabled: AtomicEnabled,
     pub rate_hz: AtomicF32,
-    pub depth: AtomicF32,
-    pub mix: AtomicF32,
+    pub depth: SmoothedParam,
+    pub mix: SmoothedParam,
     buffer: Vec<f32>, write_pos: usize, lfo_phase: f32,
 }
 
 impl Chorus {
     pub fn new(rate: f32, depth: f32, mix: f32) -> Self {
         Self { enabled: AtomicEnabled::new(true),
-            rate_hz: AtomicF32::new(rate), depth: AtomicF32::new(depth),
-            mix: AtomicF32::new(mix), buffer: vec![0.0; BUF_LEN],
+            rate_hz: AtomicF32::new(rate), depth: SmoothedParam::new(depth),
+            mix: SmoothedParam::new(mix), buffer: vec![0.0; BUF_LEN],
             write_pos: 0, lfo_phase: 0.0 }
     }
     #[inline] fn read_interp(&self, delay: f32) -> f32 {
@@ -39,11 +39,14 @@ impl AudioEffect for Chorus {
     fn process(&mut self, buffer: &mut [f32], sample_rate: u32) {
         if !self.enabled.get() { return; }
         let sr = sample_rate as f32;
-        let rate = self.rate_hz.get(); let depth = self.depth.get(); let mix = self.mix.get();
+        let rate = self.rate_hz.get();
+        let coeff = smooth_coeff(sr, 15.0);
         let inc = rate / sr;
         let sweep = SWEEP_S * sr;
         let base = (BASE_DELAY_S * sr).min((BUF_LEN - 2) as f32 - sweep);
         for s in buffer.iter_mut() {
+            let depth = self.depth.tick(coeff);
+            let mix = self.mix.tick(coeff);
             let dry = *s;
             self.buffer[self.write_pos] = dry;
             self.write_pos = (self.write_pos + 1) % self.buffer.len();
@@ -54,5 +57,8 @@ impl AudioEffect for Chorus {
             *s = dry * (1.0 - mix) + wet * mix;
         }
     }
-    fn reset(&mut self) { self.buffer.fill(0.0); self.lfo_phase = 0.0; }
+    fn reset(&mut self) {
+        self.buffer.fill(0.0); self.lfo_phase = 0.0;
+        self.depth.snap(); self.mix.snap();
+    }
 }

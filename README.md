@@ -2,15 +2,16 @@
 
 High-performance real-time audio DSP for Flutter, powered by Rust.
 
-Pitch shift, auto-tune, noise suppression, EQ, reverb, and 11 effects total —
-sub-10 ms chain latency, zero allocations on the audio thread, lock-free
+Pitch shift, auto-tune, noise suppression, EQ, reverb, and 14 effects total —
+low-latency chains, zero allocations on the audio thread, lock-free
 parameter updates.
 
 ## Features
 
-- **11 audio effects**: Noise Gate, RNNoise-based Noise Suppression, Pitch
-  Shift, Auto-Tune, 10-band Equalizer, Compressor, Limiter, Reverb, Chorus,
-  Delay, Distortion (soft/hard/tanh/bitcrush).
+- **14 audio effects**: Noise Gate, RNNoise-based Noise Suppression, Pitch
+  Shift, Auto-Tune, 10-band Equalizer, Compressor (with sidechain HPF),
+  lookahead Limiter, Reverb, Chorus, Delay, Distortion (soft/hard/tanh/bitcrush,
+  4x oversampled), De-Esser, Exciter, Doubler.
 - **Real-time mic → effects → speaker** with cpal on every desktop and mobile
   platform Flutter supports.
 - **Offline file processing** (WAV in, WAV out) — faster than real-time.
@@ -34,7 +35,7 @@ dependencies:
   flutter_audio_fx:
     git:
       url: https://github.com/rickyirfandi/flutter_audio_fx.git
-      ref: master # or a version tag, e.g. v0.2.0
+      ref: master # or a version tag, e.g. v0.3.0
 ```
 
 ## Quick start
@@ -189,6 +190,22 @@ No heap allocation, no mutex blocking, no syscalls.
 | Audio callback time             | < 3 ms per buffer |
 | CPU (all effects on, 1 channel) | < 20% on a single mid-range core |
 | Memory                          | < 50 MB total |
+
+The latency target applies to chains without the FFT-based effects. Each
+effect's own delay (reported via `fx_engine_chain_latency_ms`, counting only
+enabled effects):
+
+| Effect | Latency @ 48 kHz |
+|---|---|
+| Pitch Shift | 1536 samples (32 ms) — always, even at 0 semitones |
+| Auto-Tune | 3584 samples (~75 ms) — always, even when not correcting |
+| Noise Suppression | 480 samples (10 ms) |
+| Limiter | 240 samples (5 ms) |
+| Distortion | 16 samples (0.3 ms) |
+| All others | 0 |
+
+Pitch Shift and Auto-Tune keep their delay constant instead of bypassing at
+unity, so correction engaging/disengaging never clicks.
 
 ## License
 

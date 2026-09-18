@@ -16,6 +16,11 @@ pub trait AudioEffect: Send + Sync {
     fn latency_samples(&self) -> usize { 0 }
     fn reset(&mut self);
 
+    /// Audio thread, RT-safe (no allocation): drop any buffered audio. Called
+    /// when a disabled effect is re-enabled so latency-bearing effects don't
+    /// replay stale samples captured before they were bypassed.
+    fn flush(&mut self) {}
+
     /// RT-safe enable/disable via atomics
     fn set_enabled(&self, enabled: bool);
     fn is_enabled(&self) -> bool;
@@ -64,12 +69,15 @@ pub struct EffectSlot {
     param_tx: Mutex<HeapProd<ParamMsg>>,
     /// Audio thread is the sole consumer.
     param_rx: UnsafeCell<HeapCons<ParamMsg>>,
+    /// Enable state seen by the previous callback (audio thread only), used to
+    /// detect a disabled→enabled edge and flush stale buffered audio.
+    was_enabled: UnsafeCell<bool>,
     /// AutoTune's pitch-detector mailbox, cached at construction so the
     /// runtime can rewire the detector worker without touching the effect.
     detect: Option<Arc<DetectShared>>,
 }
 
-// SAFETY: `cell` and `param_rx` are only ever accessed by the single audio
+// SAFETY: `cell`, `param_rx` and `was_enabled` are only ever accessed by the single audio
 // thread; `enabled` is atomic; `param_tx` is behind a Mutex. See the contract.
 unsafe impl Send for EffectSlot {}
 unsafe impl Sync for EffectSlot {}
@@ -80,7 +88,8 @@ impl EffectSlot {
     }
 
     pub fn with_detect(fx: Box<dyn AudioEffect>, detect: Option<Arc<DetectShared>>) -> Self {
-        let enabled = AtomicBool::new(fx.is_enabled());
+        let initially_enabled = fx.is_enabled();
+        let enabled = AtomicBool::new(initially_enabled);
         let effect_type = fx.effect_type();
         let latency = fx.latency_samples();
         let (tx, rx) = HeapRb::<ParamMsg>::new(256).split();
@@ -91,6 +100,7 @@ impl EffectSlot {
             latency,
             param_tx: Mutex::new(tx),
             param_rx: UnsafeCell::new(rx),
+            was_enabled: UnsafeCell::new(initially_enabled),
             detect,
         }
     }
@@ -131,12 +141,16 @@ impl EffectSlot {
         // thread is the sole writer of the effect), then run if enabled.
         let enabled = self.enabled.load(Ordering::Relaxed);
         fx.set_enabled(enabled);
+        let was_enabled = &mut *self.was_enabled.get();
+        if enabled && !*was_enabled { fx.flush(); }
+        *was_enabled = enabled;
         if enabled { fx.process(buffer, sr); }
     }
 
     /// SAFETY: caller must guarantee they are not racing the audio thread
     /// (intended for offline file processing where no audio stream is live).
     #[inline]
+    #[allow(clippy::mut_from_ref)] // sound per the contract above; callers uphold exclusivity
     pub unsafe fn as_mut(&self) -> &mut Box<dyn AudioEffect> {
         &mut *self.cell.get()
     }
@@ -156,6 +170,49 @@ impl AtomicF32 {
     #[inline] pub fn set(&self, val: f32) { self.bits.store(val.to_bits(), Ordering::Relaxed); }
 }
 
+/// A parameter with an atomically-settable target and a per-sample smoothed
+/// value. Eliminates zipper noise / clicks when the UI moves a knob: the
+/// control thread `set`s the target, the audio thread `tick`s one sample at a
+/// time toward it with a one-pole slew.
+///
+/// Threading: `set`/`get` are safe from any thread; `tick`/`snap`/`current`
+/// require `&mut self` and are only called by the audio thread (which is the
+/// sole holder of `&mut` to the effect — see `EffectSlot`).
+#[derive(Debug)]
+pub struct SmoothedParam {
+    target: AtomicF32,
+    current: f32,
+}
+
+impl SmoothedParam {
+    pub fn new(v: f32) -> Self {
+        Self { target: AtomicF32::new(v), current: v }
+    }
+    /// Control thread: set the target; the audio thread slews toward it.
+    #[inline] pub fn set(&self, v: f32) { self.target.set(v); }
+    /// The target value (not the smoothed instantaneous value).
+    #[inline] pub fn get(&self) -> f32 { self.target.get() }
+    /// Audio thread: advance one sample toward the target with the given
+    /// one-pole coefficient (see [`smooth_coeff`]) and return the new value.
+    #[inline]
+    pub fn tick(&mut self, coeff: f32) -> f32 {
+        let t = self.target.get();
+        self.current = t + (self.current - t) * coeff;
+        self.current
+    }
+    /// Audio thread / reset: jump instantly to the target.
+    #[inline] pub fn snap(&mut self) { self.current = self.target.get(); }
+    /// The smoothed instantaneous value (audio thread only).
+    #[inline] pub fn current(&self) -> f32 { self.current }
+}
+
+/// One-pole smoothing coefficient for a time constant of `ms` milliseconds at
+/// sample rate `sr`. `smoothed = target + (smoothed - target) * coeff`.
+#[inline]
+pub fn smooth_coeff(sr: f32, ms: f32) -> f32 {
+    (-1.0 / (ms * 0.001 * sr).max(1.0)).exp()
+}
+
 #[derive(Debug)]
 pub struct AtomicEnabled {
     inner: AtomicBool,
@@ -173,6 +230,7 @@ impl AtomicEnabled {
 pub enum EffectType {
     NoiseGate, NoiseSuppression, PitchShift, AutoTune,
     Equalizer, Compressor, Limiter, Reverb, Chorus, Delay, Distortion,
+    DeEsser, Exciter, Doubler,
 }
 
 #[macro_export]

@@ -116,7 +116,11 @@ impl AudioRuntime {
     pub fn buffer_size(&self) -> usize { self.buffer_size }
     pub fn chain_latency_ms(&self) -> f32 {
         let chain = self.shared.chain.load();
-        let s: usize = chain.iter().map(|slot| slot.latency_samples()).sum();
+        // Bypassed slots add no delay, so only count enabled ones.
+        let s: usize = chain.iter()
+            .filter(|slot| slot.is_enabled())
+            .map(|slot| slot.latency_samples())
+            .sum();
         s as f32 / self.sample_rate as f32 * 1000.0
     }
 

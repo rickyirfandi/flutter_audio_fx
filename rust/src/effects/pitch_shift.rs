@@ -34,6 +34,9 @@ pub struct PitchShift {
     freqs: Vec<f32>,
     syn_mag: Vec<f32>,
     syn_freq: Vec<f32>,
+    /// Spectral envelope of the analysis frame (formant preservation).
+    env: Vec<f32>,
+    env_tmp: Vec<f32>,
 
     in_fifo: Vec<f32>,
     out_fifo: Vec<f32>,
@@ -74,6 +77,8 @@ impl PitchShift {
             freqs: vec![0.0; half],
             syn_mag: vec![0.0; half],
             syn_freq: vec![0.0; half],
+            env: vec![0.0; half],
+            env_tmp: vec![0.0; half],
             in_fifo: vec![0.0; fft_size],
             out_fifo: vec![0.0; fft_size],
             fifo_pos: fft_size,
@@ -83,6 +88,20 @@ impl PitchShift {
 
     fn pitch_ratio(&self) -> f32 {
         2.0_f32.powf((self.semitones.get() + self.cents.get() / 100.0) / 12.0)
+    }
+}
+
+/// Edge-clamped moving average over `2*w+1` bins (running sum, O(n), no
+/// allocation). Two passes approximate a Gaussian well enough for a spectral
+/// envelope.
+fn box_smooth(src: &[f32], dst: &mut [f32], w: usize) {
+    let n = src.len();
+    let mut sum: f32 = src[..(w + 1).min(n)].iter().sum();
+    let mut count = (w + 1).min(n);
+    for i in 0..n {
+        dst[i] = sum / count as f32;
+        if i + w + 1 < n { sum += src[i + w + 1]; count += 1; }
+        if i >= w { sum -= src[i - w]; count -= 1; }
     }
 }
 
@@ -102,7 +121,10 @@ impl AudioEffect for PitchShift {
     fn process(&mut self, buffer: &mut [f32], sample_rate: u32) {
         if !self.enabled.get() { return; }
         let ratio = self.pitch_ratio();
-        if (ratio - 1.0).abs() < 0.001 { return; }
+        // NOTE: no bypass at ratio == 1. Bypassing would drop the fft_size
+        // FIFO latency, so toggling in/out of unity (AutoTune does this
+        // constantly) would time-jump the signal and click. The vocoder is
+        // near-transparent at unity; latency stays constant instead.
 
         let fft_size = self.fft_size;
         let hop = self.hop_size;
@@ -110,19 +132,22 @@ impl AudioEffect for PitchShift {
         let sr = sample_rate as f32;
         let freq_per_bin = sr / fft_size as f32;
         let expected = 2.0 * PI * hop as f32 / fft_size as f32;
-        let norm = 1.0 / (fft_size as f32 / hop as f32 * 0.5); // overlap-add gain compensation
+        // Overlap-add gain: Hann² at N/hop overlap sums to (N/hop) * 3/8.
+        let norm = 1.0 / (fft_size as f32 / hop as f32 * 0.375);
 
         if !self.initialized {
-            self.fifo_pos = fft_size;
+            self.fifo_pos = fft_size - hop;
             for v in &mut self.in_fifo  { *v = 0.0; }
             for v in &mut self.out_fifo { *v = 0.0; }
             self.initialized = true;
         }
 
         for sample in buffer.iter_mut() {
-            self.in_fifo[self.fifo_pos % fft_size] = *sample;
-            *sample = self.out_fifo[self.fifo_pos % fft_size];
-            self.out_fifo[self.fifo_pos % fft_size] = 0.0;
+            // New input lands in the newest `hop` region of the analysis FIFO;
+            // output is read from the *oldest* `hop` of the OLA accumulator
+            // (the only region every overlapping frame has contributed to).
+            self.in_fifo[self.fifo_pos] = *sample;
+            *sample = self.out_fifo[self.fifo_pos - (fft_size - hop)];
             self.fifo_pos += 1;
 
             if self.fifo_pos >= fft_size {
@@ -150,6 +175,27 @@ impl AudioEffect for PitchShift {
                     self.freqs[k] = k as f32 * freq_per_bin + dp * freq_per_bin / expected;
                 }
 
+                // Formant preservation: estimate the spectral envelope (the
+                // formant shape), divide it out so only the excitation
+                // (harmonics) is shifted, and re-apply the *original*
+                // envelope afterwards. Envelope = double box-smoothing of the
+                // magnitude spectrum over a ~500 Hz-wide window.
+                let formant = self.formant_preserve.get();
+                if formant {
+                    let w = ((500.0 / freq_per_bin) as usize).clamp(4, half / 8);
+                    box_smooth(&self.mags, &mut self.env_tmp, w);
+                    box_smooth(&self.env_tmp, &mut self.env, w);
+                    // Floor relative to the frame peak so near-silent bins
+                    // don't get boosted by orders of magnitude.
+                    let peak = self.env.iter().fold(0.0f32, |a, &b| a.max(b));
+                    let floor = (peak * 1e-3).max(1e-9);
+                    for k in 0..half {
+                        let e = self.env[k].max(floor);
+                        self.env[k] = e;
+                        self.mags[k] /= e; // whiten
+                    }
+                }
+
                 // Pitch shift via bin remap.
                 for v in &mut self.syn_mag  { *v = 0.0; }
                 for v in &mut self.syn_freq { *v = 0.0; }
@@ -159,6 +205,9 @@ impl AudioEffect for PitchShift {
                         self.syn_mag[new_bin]  += self.mags[k];
                         self.syn_freq[new_bin]  = self.freqs[k] * ratio;
                     }
+                }
+                if formant {
+                    for k in 0..half { self.syn_mag[k] *= self.env[k]; }
                 }
 
                 // Phase reconstruction.
@@ -192,14 +241,16 @@ impl AudioEffect for PitchShift {
         }
     }
 
-    fn latency_samples(&self) -> usize { self.fft_size }
+    fn latency_samples(&self) -> usize { self.fft_size - self.hop_size }
+
+    fn flush(&mut self) { self.reset(); }
 
     fn reset(&mut self) {
         for v in &mut self.in_fifo    { *v = 0.0; }
         for v in &mut self.out_fifo   { *v = 0.0; }
         for v in &mut self.last_phase { *v = 0.0; }
         for v in &mut self.sum_phase  { *v = 0.0; }
-        self.fifo_pos = self.fft_size;
+        self.fifo_pos = self.fft_size - self.hop_size;
         self.initialized = false;
     }
 }

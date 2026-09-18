@@ -17,6 +17,9 @@ export 'src/effects/reverb.dart';
 export 'src/effects/chorus.dart';
 export 'src/effects/delay_effect.dart';
 export 'src/effects/distortion.dart';
+export 'src/effects/de_esser.dart';
+export 'src/effects/exciter.dart';
+export 'src/effects/doubler.dart';
 
 export 'src/models/preset.dart';
 export 'src/models/presets_builtin.dart';

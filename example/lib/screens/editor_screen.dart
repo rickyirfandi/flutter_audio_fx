@@ -360,6 +360,9 @@ class _AddEffectSheet extends StatelessWidget {
       ('Chorus', 'Thicken sound', Icons.multiline_chart, () => Chorus()),
       ('Delay', 'Echo effect', Icons.timer, () => DelayEffect()),
       ('Distortion', 'Saturation', Icons.electric_bolt, () => Distortion()),
+      ('De-Esser', 'Tame sibilance', Icons.graphic_eq, () => DeEsser()),
+      ('Exciter', 'Add sparkle', Icons.auto_awesome, () => Exciter()),
+      ('Doubler', 'Thicken vocals', Icons.people_alt, () => Doubler()),
     ];
 
     return Container(

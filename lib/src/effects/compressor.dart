@@ -7,6 +7,7 @@ class Compressor extends AudioEffect {
   double releaseMs;
   double makeupGainDb;
   double kneeDb;
+  double sidechainHpfHz;
 
   Compressor({
     this.thresholdDb = -20.0,
@@ -15,6 +16,7 @@ class Compressor extends AudioEffect {
     this.releaseMs = 100.0,
     this.makeupGainDb = 0.0,
     this.kneeDb = 3.0,
+    this.sidechainHpfHz = 0.0,
     super.enabled,
   });
 
@@ -32,6 +34,7 @@ class Compressor extends AudioEffect {
         'release_ms': releaseMs,
         'makeup_gain_db': makeupGainDb,
         'knee_db': kneeDb,
+        'sidechain_hpf_hz': sidechainHpfHz,
       };
 
   @override
@@ -49,6 +52,8 @@ class Compressor extends AudioEffect {
         makeupGainDb = value;
       case 'knee_db':
         kneeDb = value;
+      case 'sidechain_hpf_hz':
+        sidechainHpfHz = value;
     }
   }
 }

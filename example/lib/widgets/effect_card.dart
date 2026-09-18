@@ -39,6 +39,9 @@ class _EffectCardState extends State<EffectCard> {
         'chorus' => Icons.multiline_chart,
         'delay' => Icons.timer,
         'distortion' => Icons.electric_bolt,
+        'de_esser' => Icons.graphic_eq,
+        'exciter' => Icons.auto_awesome,
+        'doubler' => Icons.people_alt,
         _ => Icons.auto_fix_high,
       };
 
@@ -194,6 +197,9 @@ class _EffectCardState extends State<EffectCard> {
 
   (double, double) _paramRange(String effectType, String param) {
     return switch ((effectType, param)) {
+      ('de_esser', 'frequency_hz') => (2000.0, 12000.0),
+      ('exciter', 'frequency_hz') => (1000.0, 12000.0),
+      (_, 'sidechain_hpf_hz') => (0.0, 500.0),
       (_, 'threshold_db') => (-60.0, 0.0),
       (_, 'ceiling_db') => (-12.0, 0.0),
       (_, 'attack_ms') => (0.1, 100.0),

@@ -24,6 +24,9 @@ class ActiveEffectsBar extends StatelessWidget {
         'chorus' => Icons.multiline_chart,
         'delay' => Icons.timer,
         'distortion' => Icons.electric_bolt,
+        'de_esser' => Icons.graphic_eq,
+        'exciter' => Icons.auto_awesome,
+        'doubler' => Icons.people_alt,
         _ => Icons.auto_fix_high,
       };
 

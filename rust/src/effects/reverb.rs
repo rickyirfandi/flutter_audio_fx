@@ -68,7 +68,7 @@ pub struct Reverb {
     pub enabled: AtomicEnabled,
     pub room_size: AtomicF32,
     pub damping: AtomicF32,
-    pub mix: AtomicF32,
+    pub mix: SmoothedParam,
     pub pre_delay_ms: AtomicF32,
     combs: [Comb; 8],
     allpasses: [Allpass; 4],
@@ -83,7 +83,7 @@ impl Reverb {
         Self {
             enabled: AtomicEnabled::new(true),
             room_size: AtomicF32::new(room), damping: AtomicF32::new(damp),
-            mix: AtomicF32::new(mix), pre_delay_ms: AtomicF32::new(0.0),
+            mix: SmoothedParam::new(mix), pre_delay_ms: AtomicF32::new(0.0),
             combs: [Comb::new(1116),Comb::new(1188),Comb::new(1277),Comb::new(1356),
                     Comb::new(1422),Comb::new(1491),Comb::new(1557),Comb::new(1617)],
             allpasses: [Allpass::new(556),Allpass::new(441),Allpass::new(341),Allpass::new(225)],
@@ -111,11 +111,12 @@ impl AudioEffect for Reverb {
         let room = self.room_size.get() * 0.28 + 0.7;
         let damp = self.damping.get();
         for c in &mut self.combs { c.feedback = room; c.set_damp(damp); }
-        let mix = self.mix.get();
+        let mix_coeff = smooth_coeff(sr, 15.0);
         let pd_samples = ((self.pre_delay_ms.get() * 0.001 * sr) as usize)
             .min(self.delay_buf.len() - 1);
 
         for s in buffer.iter_mut() {
+            let mix = self.mix.tick(mix_coeff);
             let dry = *s;
             let delayed = if pd_samples > 0 {
                 let rp = (self.delay_pos + self.delay_buf.len() - pd_samples) % self.delay_buf.len();
@@ -136,5 +137,6 @@ impl AudioEffect for Reverb {
         for c in &mut self.combs { c.reset(); }
         for a in &mut self.allpasses { a.reset(); }
         self.delay_buf.fill(0.0); self.delay_pos = 0;
+        self.mix.snap();
     }
 }

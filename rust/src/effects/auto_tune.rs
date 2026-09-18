@@ -76,7 +76,11 @@ pub struct AutoTune {
     last_seen_gen: u32,
     current_shift: f32,
     target_shift: f32,
-    shifting: bool,
+    /// Humanize: slowly-varying random detune (semitones). A fresh target is
+    /// drawn on every detector estimate and slewed like the correction.
+    drift: f32,
+    drift_target: f32,
+    rng: u32,
     pitch_shifter: PitchShift,
 }
 
@@ -93,7 +97,9 @@ impl AutoTune {
             last_seen_gen: 0,
             current_shift: 0.0,
             target_shift: 0.0,
-            shifting: false,
+            drift: 0.0,
+            drift_target: 0.0,
+            rng: 0x2545_F491,
             pitch_shifter: PitchShift::new(0.0),
         }
     }
@@ -153,8 +159,7 @@ impl AudioEffect for AutoTune {
 
     fn process(&mut self, buffer: &mut [f32], sample_rate: u32) {
         if !self.enabled.get() { return; }
-        let speed = self.correction_speed.get();
-        if speed >= 0.999 { return; }
+        let speed = self.correction_speed.get().clamp(0.0, 1.0);
 
         // Pick up the most recent detector estimate (lock-free).
         let gen = self.shared.gen.load(Ordering::Acquire);
@@ -169,32 +174,56 @@ impl AudioEffect for AutoTune {
             } else {
                 self.target_shift = 0.0;
             }
+            // Humanize: draw a new slight random detune per estimate
+            // (xorshift — RT-safe, no syscalls). Param is the amplitude in
+            // semitones (Dart docs: 0.0..0.2).
+            let h = self.humanize.get().clamp(0.0, 1.0);
+            self.rng ^= self.rng << 13;
+            self.rng ^= self.rng >> 17;
+            self.rng ^= self.rng << 5;
+            let r = (self.rng as f32 / u32::MAX as f32) * 2.0 - 1.0;
+            self.drift_target = r * h;
         }
 
-        // Smooth correction.
-        let coeff = speed.powf(0.1);
+        // Smooth correction. Historically the coefficient was speed^0.1 once
+        // per 256-frame buffer at 48 kHz; normalize by the actual number of
+        // samples so the retune *rate* no longer depends on host buffer size
+        // or stream rate. speed >= ~1.0 means "no correction".
+        let frames = buffer.len() as f32;
+        let sr = sample_rate as f32;
+        let coeff = if speed >= 0.999 {
+            // "No correction": relax any in-progress shift to zero over
+            // ~50 ms rather than freezing it in place.
+            self.target_shift = 0.0;
+            (-frames / (0.05 * sr)).exp()
+        } else {
+            speed.powf(18.75 * frames / sr) // 18.75 = 0.1 * (48000 / 256)
+        };
         self.current_shift = self.current_shift * coeff + self.target_shift * (1.0 - coeff);
+        // Humanize drift gets its own slow (~150 ms) glide: sharing the
+        // correction coefficient made it jump to a fresh random value on every
+        // detector estimate at speed 0, i.e. a stepped warble.
+        let drift_coeff = (-frames / (0.15 * sr)).exp();
+        self.drift = self.drift * drift_coeff + self.drift_target * (1.0 - drift_coeff);
 
-        if self.current_shift.abs() > 0.01 {
-            self.pitch_shifter.semitones.set(self.current_shift);
-            self.pitch_shifter.process(buffer, sample_rate);
-            self.shifting = true;
-        } else if self.shifting {
-            // Correction just crossed back to ~unity: clear the phase-vocoder
-            // FIFO so it doesn't resume later with stale, glitchy state.
-            self.pitch_shifter.reset();
-            self.shifting = false;
-        }
+        // Always run the shifter — even at ~zero correction — so the path
+        // latency is constant and correction engaging/disengaging can never
+        // time-jump the signal (the old bypass clicked on every note onset).
+        self.pitch_shifter.semitones.set(self.current_shift + self.drift);
+        self.pitch_shifter.process(buffer, sample_rate);
     }
 
     fn latency_samples(&self) -> usize {
         self.pitch_shifter.latency_samples() + 2048
     }
 
+    fn flush(&mut self) { self.reset(); }
+
     fn reset(&mut self) {
         self.current_shift = 0.0;
         self.target_shift = 0.0;
-        self.shifting = false;
+        self.drift = 0.0;
+        self.drift_target = 0.0;
         self.pitch_shifter.reset();
     }
 }

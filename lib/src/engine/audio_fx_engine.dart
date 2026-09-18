@@ -66,6 +66,13 @@ class AudioFxEngine {
     if (!ok) {
       throw StateError('Native engine init failed: ${_lastNativeError()}');
     }
+    // The native runtime is a process-wide singleton that survives Flutter
+    // hot restart. If a previous Dart lifetime left a session running, stop
+    // it now — otherwise every startMic() fails with "Already running" and
+    // no public API can recover.
+    if (native.fxEngineIsRunning()) {
+      native.fxEngineStop();
+    }
     _initialized = true;
   }
 
@@ -174,13 +181,16 @@ class AudioFxEngine {
   }
 
   Future<void> stop() async {
-    if (_mode == ProcessingMode.idle) return;
+    // Don't gate on _mode: after a hot restart Dart state resets to idle
+    // while the native session keeps running, and skipping the native stop
+    // here would leave it wedged. fx_engine_stop is a no-op when idle.
+    if (!_initialized) return;
     _stopVizPolling();
     final rc = native.fxEngineStop();
+    _mode = ProcessingMode.idle;
     if (rc != 0) {
       throw StateError('stop failed (code $rc): ${_lastNativeError()}');
     }
-    _mode = ProcessingMode.idle;
   }
 
   // ─── File processing ───

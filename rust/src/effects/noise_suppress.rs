@@ -80,6 +80,13 @@ impl AudioEffect for NoiseSuppression {
 
     fn latency_samples(&self) -> usize { FRAME_SIZE }
 
+    /// Drop buffered audio without rebuilding the denoiser (that allocates).
+    fn flush(&mut self) {
+        self.in_buf.fill(0.0);
+        self.out_buf.fill(0.0);
+        self.pos = 0;
+    }
+
     fn reset(&mut self) {
         self.denoiser = DenoiseState::new();
         self.in_buf.fill(0.0);

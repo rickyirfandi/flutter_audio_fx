@@ -9,6 +9,9 @@ pub mod reverb;
 pub mod chorus;
 pub mod delay;
 pub mod distortion;
+pub mod de_esser;
+pub mod exciter;
+pub mod doubler;
 
 pub use noise_gate::NoiseGate;
 pub use noise_suppress::NoiseSuppression;
@@ -21,3 +24,6 @@ pub use reverb::Reverb;
 pub use chorus::Chorus;
 pub use delay::Delay;
 pub use distortion::{Distortion, DistortionType};
+pub use de_esser::DeEsser;
+pub use exciter::Exciter;
+pub use doubler::Doubler;

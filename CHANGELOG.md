@@ -1,9 +1,84 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
+
+### Added
+
+- **Split-band de-esser** with adjustable crossover, threshold, attenuation
+  amount, and release.
+- **Harmonic exciter** with high-band drive and a smoothed wet mix. Adds only
+  harmonics: quiet material passes at unity, and the high band gains at most
+  +6 dB even at full drive and mix.
+- **Vocal doubler** with two independently modulated fractional-delay voices,
+  crossfaded against the dry signal so it is never louder than its input.
+- **4x distortion oversampling** (65-tap Kaiser polyphase, -55 dB at 28 kHz)
+  to reduce nonlinear aliasing. The dry path is delayed to match the wet
+  path, so dry/wet blends don't comb-filter; Distortion now reports 16
+  samples of latency.
+- **Compressor sidechain high-pass filter** to reduce bass-triggered pumping.
+
+### Fixed (DSP quality)
+
+- **Phase-vocoder output FIFO read bug.** The pitch shifter read the
+  freshly-cleared end of the overlap-add accumulator instead of the fully
+  accumulated start, so all shifted audio was ~27 dB too quiet with heavy
+  windowing tremolo. Also corrected the OLA gain constant (Hann² at 75%
+  overlap sums to 1.5, not 2.0). Unity reconstruction is now transparent
+  (YIN reads 220.002 Hz at conf 0.99999 on a 220 Hz probe).
+- **`formant_preserve` was dead code — now implemented.** The magnitude
+  spectrum is whitened by its smoothed spectral envelope before the pitch
+  remap and the *original* envelope is re-applied after, so formants stay
+  put while harmonics move (no more chipmunk timbre on upward shifts).
+- **`humanize` was dead code — now implemented** as a slowly-varying random
+  detune (semitone amplitude = the param value, redrawn per detector
+  estimate), per its documented semantics.
+- **AutoTune retune speed no longer depends on buffer size.** The smoothing
+  coefficient was applied once per `process()` call, so 128-sample buffers
+  retuned 4x faster than 512. It is now normalized per-sample (calibrated to
+  preserve the historical feel at 256 frames / 48 kHz).
+- **Correction engage/disengage no longer clicks.** AutoTune's inner shifter
+  used to be bypassed near unity, so the signal time-jumped through the
+  vocoder FIFO every time correction kicked in. The vocoder now always runs
+  (constant `fft_size - hop` latency); unity is near-transparent.
+- **Limiter rewritten with 240-sample (5 ms @ 48 kHz) lookahead.** Required
+  gain is tracked with a sliding-window minimum over the lookahead horizon,
+  so gain ramps down *before* transients instead of clamping them after the
+  fact (the old design behaved like a clipper). Reports its latency.
+- **Parameter changes no longer zipper or click.** New `SmoothedParam`
+  (atomic target + per-sample one-pole slew) applied to delay mix/feedback,
+  reverb mix, chorus mix/depth, distortion drive/mix, and compressor makeup.
+  Delay time changes glide the read pointer at ≤0.5 samples/sample with
+  fractional interpolation (bounded tape-style bend instead of a click), and
+  the delay buffer is now sized for 2 s at up to 192 kHz (it was hardcoded
+  to 96000 samples ≈ 1 s at 96 kHz).
+
+- **New effects no longer glide in from defaults.** Freshly built effects
+  started at their constructor defaults and slewed to the preset values over
+  ~15 ms (e.g. a mix=0 delay briefly played wet). They now start at the
+  configured values.
+- **Re-enabling a latency-bearing effect no longer replays stale audio.**
+  Limiter, Pitch Shift, Auto-Tune, Noise Suppression and Distortion flush
+  their internal buffers when switched back on (RT-safe, no allocation).
+- **Auto-Tune humanize is smooth at fast retune speeds.** The random detune
+  shared the correction's smoothing, so at speed 0 it jumped to a new value on
+  every pitch estimate; it now glides with its own ~150 ms time constant.
+- **Reported chain latency ignores disabled effects.**
+- **De-esser and exciter crossovers are clamped below Nyquist**, so they keep
+  working at low stream rates such as 8 kHz.
 
 ### Changed
 
+- **Minimum supported Rust version is now 1.83** (it already relied on
+  `const f32::to_bits`).
+- **Dropped unused package dependencies.** `permission_handler` and
+  `path_provider` were declared by the package but never used by its code
+  (only the example app needs them); consumers no longer inherit those
+  plugins and their platform setup. The example declares them directly.
+- **Hot restart no longer wedges the engine.** The native runtime survives a
+  Flutter hot restart, so a session left running kept rejecting `startMic()`
+  with "Already running" while `stop()` no-op'd (Dart state had reset to
+  idle). `init()` now stops a stale native session, and `stop()` always
+  reaches the native engine regardless of Dart-side mode.
 - **Precompiled binaries are committed to the repo by CI.** The
   `build-native` workflow now builds all five platforms on version tags (and
   manual dispatch), validates the package, and auto-commits the binaries to

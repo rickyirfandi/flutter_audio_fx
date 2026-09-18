@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'flutter_audio_fx'
-  s.version          = '0.2.0'
+  s.version          = '0.3.0'
   s.summary          = 'High-performance real-time audio DSP for Flutter (Rust core).'
   s.description      = <<-DESC
     Real-time audio effects (pitch shift, auto-tune, noise suppression,

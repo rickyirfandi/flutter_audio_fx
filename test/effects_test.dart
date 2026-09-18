@@ -39,6 +39,28 @@ void main() {
       // Default 10-band EQ with gain=0 across the board.
       expect(p.length, greaterThanOrEqualTo(20));
     });
+
+    test('Tier-2 vocal effects serialize their Rust parameter names', () {
+      final deEsser = DeEsser(frequencyHz: 7000, amount: 0.8);
+      expect(deEsser.toJson()['type'], 'de_esser');
+      expect(deEsser.toParams()['frequency_hz'], 7000);
+      expect(deEsser.toParams()['amount'], 0.8);
+
+      final exciter = Exciter(drive: 0.7, mix: 0.4);
+      expect(exciter.toJson()['type'], 'exciter');
+      expect(exciter.toParams()['drive'], 0.7);
+
+      final doubler = Doubler(mix: 0.6, spread: 0.5);
+      expect(doubler.toJson()['type'], 'doubler');
+      expect(doubler.toParams(), {'mix': 0.6, 'spread': 0.5});
+    });
+
+    test('Compressor serializes and updates its sidechain HPF', () {
+      final compressor = Compressor(sidechainHpfHz: 120);
+      expect(compressor.toParams()['sidechain_hpf_hz'], 120);
+      compressor.updateParam('sidechain_hpf_hz', 250);
+      expect(compressor.sidechainHpfHz, 250);
+    });
   });
 
   group('PitchData', () {
@@ -65,8 +87,8 @@ void main() {
   group('SpectrumData', () {
     test('toBands collapses into requested number of bins', () {
       final s = SpectrumData(
-        magnitudes: Float32List.fromList(
-            List<double>.generate(64, (i) => i / 64.0)),
+        magnitudes:
+            Float32List.fromList(List<double>.generate(64, (i) => i / 64.0)),
         dominantFreq: 440,
         rms: 0.1,
         binCount: 64,

@@ -230,6 +230,9 @@ pub unsafe extern "C" fn fx_chain_push_effect(
         "delay"          => (Box::new(effects::Delay::new(250.0, 0.4, 0.3)), None),
         "distortion"     => (Box::new(effects::Distortion::new(
             0.3, 0.7, 0.5, effects::DistortionType::SoftClip)), None),
+        "de_esser"       => (Box::new(effects::DeEsser::new(6000.0, -30.0, 1.0, 60.0)), None),
+        "exciter"        => (Box::new(effects::Exciter::new(3000.0, 0.5, 0.3)), None),
+        "doubler"        => (Box::new(effects::Doubler::new(0.3, 1.0)), None),
         _ => return -1,
     };
     fx.set_enabled(enabled);
@@ -277,7 +280,15 @@ fn rebuild_chain(
                 for (name, v) in &pe.params { slot.queue_param(name, *v); }
                 slot
             }
-            None => Arc::new(EffectSlot::with_detect(pe.fx, pe.detect)),
+            None => {
+                // Fresh effect: its SmoothedParams were constructed at the
+                // defaults and the preset params only moved their targets.
+                // reset() snaps them so the first callback doesn't glide from
+                // default to preset value (e.g. a mix=0 delay leaking wet).
+                let mut fx = pe.fx;
+                fx.reset();
+                Arc::new(EffectSlot::with_detect(fx, pe.detect))
+            }
         };
         slot.set_enabled(pe.enabled);
         slots.push(slot);
@@ -382,6 +393,18 @@ mod tests {
             !old.iter().any(|o| Arc::ptr_eq(&new[2], o)),
             "chorus has no old match and must be new",
         );
+    }
+
+    #[test]
+    fn fresh_slot_starts_at_its_preset_values() {
+        // Regression: a new effect's SmoothedParams started at the constructor
+        // defaults and glided to the preset values over ~15 ms.
+        let fx = effects::Doubler::new(0.3, 1.0);
+        assert!(fx.set_param("mix", 0.0));
+        let new = rebuild_chain(&[], vec![pe(Box::new(fx))]);
+        let mut buf = vec![0.5f32; 64];
+        unsafe { new[0].process_in_place(&mut buf, 48_000) };
+        assert!(buf.iter().all(|&s| s == 0.5), "mix=0 must be dry from the first sample");
     }
 
     #[test]
