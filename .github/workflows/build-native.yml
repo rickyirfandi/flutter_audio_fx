@@ -127,8 +127,14 @@ jobs:
           cargo build --release --target aarch64-apple-ios-sim
           cargo build --release --target x86_64-apple-ios
 
-      - name: Assemble xcframework + legacy device .a
+      - name: Assemble xcframework
         run: |
+          # Cargo's `strip = true` doesn't reach static archives: they still
+          # carry the precompiled std's debug info (~20 MB per slice).
+          # `strip -S` drops debug symbols only; exported fx_* stay intact.
+          for t in aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios; do
+            strip -S rust/target/$t/release/libflutter_audio_fx_core.a
+          done
           mkdir -p stage/ios build/sim
           lipo -create \
             rust/target/aarch64-apple-ios-sim/release/libflutter_audio_fx_core.a \
@@ -138,10 +144,6 @@ jobs:
             -library rust/target/aarch64-apple-ios/release/libflutter_audio_fx_core.a \
             -library build/sim/libflutter_audio_fx_core.a \
             -output stage/ios/flutter_audio_fx_core.xcframework
-          # Legacy fallback (only used if the xcframework is absent): device
-          # slice only. Device arm64 and simulator arm64 can't share a fat .a.
-          cp rust/target/aarch64-apple-ios/release/libflutter_audio_fx_core.a \
-            stage/ios/libflutter_audio_fx_core.a
 
       - uses: actions/upload-artifact@v4
         with:
@@ -175,6 +177,8 @@ jobs:
             target/aarch64-apple-darwin/release/libflutter_audio_fx_core.a \
             target/x86_64-apple-darwin/release/libflutter_audio_fx_core.a \
             -output ../stage/macos/libflutter_audio_fx_core.a
+          # Drop debug info (see iOS job); keeps the package under pub's limit.
+          strip -S ../stage/macos/libflutter_audio_fx_core.a
 
       - uses: actions/upload-artifact@v4
         with:
@@ -258,10 +262,9 @@ jobs:
           mkdir -p android/src/main/jniLibs
           cp -R artifacts/native-android/* android/src/main/jniLibs/
 
-          # iOS: xcframework (preferred by podspec) + legacy device-only .a
+          # iOS: xcframework (device + simulator slices)
           rm -rf ios/flutter_audio_fx_core.xcframework
           cp -R artifacts/native-ios/flutter_audio_fx_core.xcframework ios/
-          cp artifacts/native-ios/libflutter_audio_fx_core.a ios/
 
           # macOS: universal static lib (podspec vendored_libraries)
           cp artifacts/native-macos/libflutter_audio_fx_core.a macos/
@@ -275,7 +278,7 @@ jobs:
       - name: Verify structure
         run: |
           echo "=== Android ===" && find android/src/main/jniLibs -type f | sort
-          echo "=== iOS ==="     && find ios/flutter_audio_fx_core.xcframework -maxdepth 2 && ls -lh ios/libflutter_audio_fx_core.a
+          echo "=== iOS ==="     && find ios/flutter_audio_fx_core.xcframework -type f -exec ls -lh {} +
           echo "=== macOS ==="   && ls -lh macos/libflutter_audio_fx_core.a
           echo "=== Linux ==="   && ls -lh linux/libflutter_audio_fx_core.so
           echo "=== Windows ===" && ls -lh windows/flutter_audio_fx_core.dll
@@ -289,6 +292,7 @@ jobs:
       - name: Validate package
         run: |
           flutter pub get
+          git checkout -- example/
           flutter analyze lib test
           flutter test
           flutter pub publish --dry-run
@@ -301,7 +305,6 @@ jobs:
           git add -f \
             android/src/main/jniLibs/ \
             ios/flutter_audio_fx_core.xcframework/ \
-            ios/libflutter_audio_fx_core.a \
             macos/libflutter_audio_fx_core.a \
             linux/libflutter_audio_fx_core.so \
             windows/flutter_audio_fx_core.dll
@@ -313,7 +316,7 @@ jobs:
 
           Built from ${GITHUB_SHA::8} via CI (${{ github.ref_name }}).
           Platforms: Android (arm64-v8a, armeabi-v7a, x86_64), iOS
-          (xcframework + device .a), macOS (universal .a), Linux (x64),
+          (xcframework), macOS (universal .a), Linux (x64),
           Windows (x64)."
             # Tags publish to the default branch (fails if it has moved past
             # the tagged commit — re-tag rather than mix code and binaries);
@@ -333,7 +336,7 @@ jobs:
         run: |
           mkdir -p dist
           zip -r dist/flutter_audio_fx_android.zip android/src/main/jniLibs
-          zip -r dist/flutter_audio_fx_ios.zip ios/flutter_audio_fx_core.xcframework ios/libflutter_audio_fx_core.a
+          zip -r dist/flutter_audio_fx_ios.zip ios/flutter_audio_fx_core.xcframework
           zip -r dist/flutter_audio_fx_macos.zip macos/libflutter_audio_fx_core.a
           zip -r dist/flutter_audio_fx_linux.zip linux/libflutter_audio_fx_core.so
           zip -r dist/flutter_audio_fx_windows.zip windows/flutter_audio_fx_core.dll

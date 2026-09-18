@@ -12,7 +12,6 @@ required=(
   android/src/main/jniLibs/armeabi-v7a/libflutter_audio_fx_core.so
   android/src/main/jniLibs/x86_64/libflutter_audio_fx_core.so
   ios/flutter_audio_fx_core.xcframework/Info.plist
-  ios/libflutter_audio_fx_core.a
   macos/libflutter_audio_fx_core.a
   linux/libflutter_audio_fx_core.so
   windows/flutter_audio_fx_core.dll

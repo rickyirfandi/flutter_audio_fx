@@ -255,7 +255,7 @@ version tag. For contributors working on the Rust core in `rust/`:
 
 ```bash
 make android   # → android/src/main/jniLibs/<abi>/libflutter_audio_fx_core.so
-make ios       # → ios/flutter_audio_fx_core.xcframework (+ device .a)
+make ios       # → ios/flutter_audio_fx_core.xcframework
 make macos     # → macos/libflutter_audio_fx_core.a (universal)
 make linux     # → linux/libflutter_audio_fx_core.so
 make windows   # → windows/flutter_audio_fx_core.dll
