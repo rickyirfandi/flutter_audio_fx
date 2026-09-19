@@ -302,6 +302,8 @@ class AudioFxEngine {
         binCount: _scalarU.value,
         freqResolution: config.sampleRate / (_scalarU.value * 2.0),
       ));
+    }
+    if (n > 0 && _waveformCtrl.hasListener) {
       // Amplitude-envelope point for WaveformVisualizer (one level per frame;
       // this is a meter/envelope, not sample-accurate audio).
       _waveformCtrl.add(Float32List.fromList(<double>[_scalarF2.value]));

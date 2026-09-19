@@ -105,6 +105,25 @@ fn ffi_surface_end_to_end() {
         "processed output should carry signal",
     );
 
+    // An idle editor update must affect the very next export, including when
+    // setChain reuses a slot and queues the new preset's parameters.
+    fx_chain_begin();
+    assert_eq!(unsafe { fx_chain_push_effect(c("noise_gate").as_ptr(), true) }, 0);
+    assert_eq!(unsafe { fx_chain_set_param(c("threshold_db").as_ptr(), -80.0) }, 0);
+    assert_eq!(fx_chain_commit(), 0);
+    assert_eq!(unsafe { fx_chain_update_param(0, c("threshold_db").as_ptr(), 0.0) }, 0);
+    assert_eq!(unsafe { fx_engine_process_file(in_c.as_ptr(), out_c.as_ptr()) }, 0);
+    let (muted, _) = file_io::read_wav(out_path.to_str().unwrap()).unwrap();
+    assert!(muted.iter().all(|s| s.abs() < 1e-4), "queued gate threshold must mute export");
+
+    fx_chain_begin();
+    assert_eq!(unsafe { fx_chain_push_effect(c("noise_gate").as_ptr(), true) }, 0);
+    assert_eq!(unsafe { fx_chain_set_param(c("threshold_db").as_ptr(), -80.0) }, 0);
+    assert_eq!(fx_chain_commit(), 0);
+    assert_eq!(unsafe { fx_engine_process_file(in_c.as_ptr(), out_c.as_ptr()) }, 0);
+    let (audible, _) = file_io::read_wav(out_path.to_str().unwrap()).unwrap();
+    assert!(audible.iter().any(|s| s.abs() > 0.1), "reused slot must use new preset");
+
     // ── Error paths surface messages ──
     let missing = c(dir.join("fx_api_test_missing.wav").to_str().unwrap());
     assert_eq!(

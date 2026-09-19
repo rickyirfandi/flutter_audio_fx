@@ -57,6 +57,20 @@ jobs:
       - run: flutter analyze lib test
       - run: flutter test
 
+      - name: Install Rust for Dart FFI integration tests
+        run: |
+          rustup toolchain install ${{ env.RUST_VERSION }}
+          rustup default ${{ env.RUST_VERSION }}
+          sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - name: Build current source for Dart FFI tests
+        run: cargo build --locked --manifest-path rust/Cargo.toml
+      - name: Test Dart bindings and export worker isolate
+        env:
+          FLUTTER_AUDIO_FX_NATIVE_TESTS: '1'
+        run: |
+          LD_LIBRARY_PATH="$PWD/rust/target/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+            flutter test test/native_engine_test.dart
+
   # ─────────────────────────── Android ───────────────────────────
   build-android:
     name: Android (arm64 / armv7 / x86_64)

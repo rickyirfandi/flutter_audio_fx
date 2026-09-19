@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- Added opt-in Dart-to-Rust integration tests for worker-isolate exports,
+  queued settings, offline pitch correction, and file-error recovery. CI runs
+  them against the current Rust source.
+
+- Export and preview apply queued effect settings, including reused preset
+  slots, before rendering. Offline auto-tune now analyzes the source audio.
+- Offline renders and stream lifecycle operations are serialized to prevent
+  concurrent access to effect state.
+- Recording file-creation errors fail startup; write/finalization failures are
+  returned by `stop()`. The example reports these failures without adding a
+  failed recording to its library.
+- Waveform events no longer require a spectrum-stream subscriber.
+- Retained the example's legacy reorder callback for Flutter 3.27 compatibility
+  with a targeted deprecation suppression.
+
 ## 0.3.0
 
 ### Added

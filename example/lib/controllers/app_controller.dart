@@ -131,7 +131,9 @@ class AppController extends ChangeNotifier {
     _isRecording = false;
 
     try { await engine.stop(); } catch (e) {
-      debugPrint('[VoxForge] Stop error: $e');
+      _currentProject = null;
+      _setError('Could not save recording: $e');
+      return;
     }
 
     if (_currentProject != null) {

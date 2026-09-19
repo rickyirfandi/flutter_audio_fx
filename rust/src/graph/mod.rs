@@ -128,7 +128,26 @@ impl EffectSlot {
     /// SAFETY: caller must be the audio thread (sole writer / sole consumer).
     #[inline]
     pub unsafe fn process_in_place(&self, buffer: &mut [f32], sr: u32) {
-        let fx: &mut Box<dyn AudioEffect> = &mut *self.cell.get();
+        self.apply_pending();
+        let fx = &mut *self.cell.get();
+        let enabled = self.enabled.load(Ordering::Relaxed);
+        let was_enabled = &mut *self.was_enabled.get();
+        if enabled && !*was_enabled { fx.flush(); }
+        *was_enabled = enabled;
+        if enabled { fx.process(buffer, sr); }
+    }
+
+    /// Apply queued settings before resetting an offline render, so smoothed
+    /// parameters start at the requested values rather than the previous ones.
+    /// SAFETY: caller must have exclusive access to the effect and queue.
+    pub unsafe fn prepare_offline(&self) {
+        self.apply_pending();
+        (&mut *self.cell.get()).reset();
+        *self.was_enabled.get() = self.is_enabled();
+    }
+
+    unsafe fn apply_pending(&self) {
+        let fx = &mut *self.cell.get();
         // Drain pending parameter updates (sole consumer) — even while
         // disabled, so values are current when re-enabled.
         let rx: &mut HeapCons<ParamMsg> = &mut *self.param_rx.get();
@@ -141,10 +160,6 @@ impl EffectSlot {
         // thread is the sole writer of the effect), then run if enabled.
         let enabled = self.enabled.load(Ordering::Relaxed);
         fx.set_enabled(enabled);
-        let was_enabled = &mut *self.was_enabled.get();
-        if enabled && !*was_enabled { fx.flush(); }
-        *was_enabled = enabled;
-        if enabled { fx.process(buffer, sr); }
     }
 
     /// SAFETY: caller must guarantee they are not racing the audio thread

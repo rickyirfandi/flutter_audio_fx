@@ -210,6 +210,8 @@ class _EditorScreenState extends State<EditorScreen> {
                 : ReorderableListView.builder(
                     padding: const EdgeInsets.symmetric(horizontal: Spacing.md),
                     itemCount: _ctrl.chain.length,
+                    // Keep compatibility with the package's Flutter 3.27 minimum.
+                    // ignore: deprecated_member_use
                     onReorder: (from, to) {
                       if (to > from) to--;
                       _ctrl.reorderEffect(from, to);

@@ -68,6 +68,8 @@ pub struct AudioRuntime {
     /// Progress of the current `process_file` call (0.0..=1.0), readable from
     /// other threads while the blocking call runs.
     file_progress: AtomicF32W,
+    // Serializes offline access to EffectSlot's UnsafeCell with stream lifecycle.
+    operation_lock: Arc<Mutex<()>>,
 
     cmd_tx: mpsc::Sender<(Command, mpsc::Sender<Reply>)>,
     audio_thread: Mutex<Option<JoinHandle<()>>>,
@@ -87,9 +89,11 @@ impl AudioRuntime {
 
         let (cmd_tx, cmd_rx) = mpsc::channel::<(Command, mpsc::Sender<Reply>)>();
         let shared_at = Arc::clone(&shared);
+        let operation_lock = Arc::new(Mutex::new(()));
+        let control_lock = Arc::clone(&operation_lock);
         let audio_thread = thread::Builder::new()
             .name("flutter_audio_fx-audio".into())
-            .spawn(move || audio_control_loop(sample_rate, shared_at, cmd_rx))
+            .spawn(move || audio_control_loop(sample_rate, shared_at, cmd_rx, control_lock))
             .expect("spawn audio control thread");
 
         Self {
@@ -97,6 +101,7 @@ impl AudioRuntime {
             mode: AtomicU8::new(Mode::Idle as u8),
             shared,
             file_progress: AtomicF32W::new(0.0),
+            operation_lock,
             cmd_tx,
             audio_thread: Mutex::new(Some(audio_thread)),
         }
@@ -183,34 +188,17 @@ impl AudioRuntime {
     pub fn process_file(
         &self, input_path: &str, output_path: &str,
     ) -> Result<String, String> {
+        let _operation = self.operation_lock.lock().map_err(|e| e.to_string())?;
         if self.is_running() {
             return Err("Stop the live engine before processing files".into());
         }
         self.file_progress.set(0.0);
         let (samples, meta) = file_io::read_wav_mono(input_path)?;
-        let chunk = 512;
-        let mut output = Vec::with_capacity(samples.len());
-        let mut pos = 0;
         let chain = self.shared.chain.load();
-        // Slots are reused across chain edits, so they may carry live-session
-        // state (reverb tails, delay lines). Start the render clean and leave
-        // it clean for the next realtime session.
-        // SAFETY: no audio stream is running (checked above).
-        for slot in chain.iter() { unsafe { slot.as_mut().reset(); } }
-        while pos < samples.len() {
-            let end = (pos + chunk).min(samples.len());
-            let mut buf: Vec<f32> = samples[pos..end].to_vec();
-            for slot in chain.iter() {
-                if !slot.is_enabled() { continue; }
-                // SAFETY: no audio stream is running.
-                let fx = unsafe { slot.as_mut() };
-                fx.process(&mut buf, meta.sample_rate);
-            }
-            output.extend_from_slice(&buf);
-            pos = end;
-            self.file_progress.set(pos as f32 / samples.len() as f32);
-        }
-        for slot in chain.iter() { unsafe { slot.as_mut().reset(); } }
+        // SAFETY: operation_lock excludes other renders and stream startup;
+        // the running check excludes an existing live callback.
+        let output = unsafe { render_samples(&samples, meta.sample_rate, &chain,
+            |p| self.file_progress.set(p)) };
         file_io::write_wav(output_path, &output, meta.sample_rate, 1)?;
         self.file_progress.set(1.0);
         Ok(output_path.to_string())
@@ -243,6 +231,46 @@ impl Drop for AudioRuntime {
     }
 }
 
+/// Shared export/preview renderer. Pitch analysis runs synchronously on this
+/// non-audio thread, using source samples (as the live microphone detector does).
+/// SAFETY: the caller must exclude every other renderer and live DSP callback.
+unsafe fn render_samples(
+    samples: &[f32], sample_rate: u32, chain: &[Arc<EffectSlot>],
+    mut progress: impl FnMut(f32),
+) -> Vec<f32> {
+    let detectors: Vec<_> = chain.iter().filter_map(|s| s.detect_shared()).collect();
+    let mut yin = YinDetector::new(2048);
+    let mut window = vec![0.0; yin.window()];
+    for slot in chain { slot.prepare_offline(); }
+    let mut output = Vec::with_capacity(samples.len());
+    for (index, chunk) in samples.chunks(512).enumerate() {
+        let pos = index * 512;
+        if !detectors.is_empty() {
+            // Offline lookahead is available, including for the first block.
+            window.fill(0.0);
+            let end = (pos + window.len()).min(samples.len());
+            window[..end - pos].copy_from_slice(&samples[pos..end]);
+            let (freq, conf) = yin.detect(&window, sample_rate).unwrap_or((0.0, 0.0));
+            for detector in &detectors {
+                detector.freq.set(freq);
+                detector.conf.set(conf);
+                detector.gen.fetch_add(1, Ordering::Release);
+            }
+        }
+        let mut buf = chunk.to_vec();
+        for slot in chain { slot.process_in_place(&mut buf, sample_rate); }
+        output.extend_from_slice(&buf);
+        progress(output.len() as f32 / samples.len() as f32);
+    }
+    for detector in &detectors {
+        detector.freq.set(0.0);
+        detector.conf.set(0.0);
+        detector.gen.fetch_add(1, Ordering::Release);
+    }
+    for slot in chain { slot.as_mut().reset(); }
+    output
+}
+
 // ─── Audio control thread ───
 //
 // Owns all `cpal::Stream` instances (which are `!Send` on some platforms),
@@ -252,17 +280,19 @@ fn audio_control_loop(
     sample_rate: u32,
     shared: Arc<SharedState>,
     rx: mpsc::Receiver<(Command, mpsc::Sender<Reply>)>,
+    operation_lock: Arc<Mutex<()>>,
 ) {
     let mut state = AudioState::new();
     while let Ok((cmd, reply)) = rx.recv() {
+        let _operation = operation_lock.lock().unwrap();
         let r = match cmd {
             Command::StartRealtime =>
                 state.start_realtime(sample_rate, &shared, false, None, None),
             Command::StartRecording { raw, processed } =>
                 state.start_realtime(sample_rate, &shared, true, Some(raw), processed),
             Command::PreviewFile(path) => state.preview_file(&path, &shared),
-            Command::Stop => { state.stop(&shared); Ok(()) }
-            Command::Shutdown => { state.stop(&shared); break; }
+            Command::Stop => state.stop(&shared),
+            Command::Shutdown => { let _ = state.stop(&shared); break; }
         };
         let _ = reply.send(r);
     }
@@ -439,6 +469,11 @@ impl AudioState {
             None,
         ).map_err(|e| format!("Output stream: {}", e))?;
 
+        // Open both files before starting capture. Failure must reach the caller,
+        // not disappear inside a writer thread after start() reported success.
+        let raw_file = if recording { raw_path.as_deref().map(|p| create_writer(p, sr)).transpose()? } else { None };
+        let proc_file = if recording { proc_path.as_deref().map(|p| create_writer(p, sr)).transpose()? } else { None };
+
         input_stream.play().map_err(|e| format!("Play input: {}", e))?;
         output_stream.play().map_err(|e| format!("Play output: {}", e))?;
 
@@ -448,10 +483,8 @@ impl AudioState {
         // no-ops and output plays silence until this flips.)
         shared.is_running.store(true, Ordering::Release);
 
-        if is_rec {
-            if let Some(p) = raw_path  { self.raw_writer  = Some(spawn_writer(p, sr, raw_cons)); }
-            if let Some(p) = proc_path { self.proc_writer = Some(spawn_writer(p, sr, proc_cons)); }
-        }
+        if let Some(writer) = raw_file { self.raw_writer = Some(spawn_writer(writer, raw_cons)); }
+        if let Some(writer) = proc_file { self.proc_writer = Some(spawn_writer(writer, proc_cons)); }
         self.detector = Some(spawn_detector(sr, det_cons, Arc::clone(shared)));
         self.spectrum = Some(spawn_spectrum(sr, spec_cons, Arc::clone(shared)));
 
@@ -466,25 +499,9 @@ impl AudioState {
         }
         // Mono chain — downmix multi-channel input (playback upmixes again).
         let (samples, meta) = file_io::read_wav_mono(input_path)?;
-        let chunk = 512;
-        let mut processed = Vec::with_capacity(samples.len());
-        let mut pos = 0;
         let chain = shared.chain.load();
-        // SAFETY: no audio stream is running (checked above). Reset so the
-        // render neither inherits live-session state nor leaves any behind.
-        for slot in chain.iter() { unsafe { slot.as_mut().reset(); } }
-        while pos < samples.len() {
-            let end = (pos + chunk).min(samples.len());
-            let mut buf: Vec<f32> = samples[pos..end].to_vec();
-            for slot in chain.iter() {
-                if !slot.is_enabled() { continue; }
-                let fx = unsafe { slot.as_mut() };
-                fx.process(&mut buf, meta.sample_rate);
-            }
-            processed.extend_from_slice(&buf);
-            pos = end;
-        }
-        for slot in chain.iter() { unsafe { slot.as_mut().reset(); } }
+        // SAFETY: the control loop holds operation_lock and no live DSP runs.
+        let processed = unsafe { render_samples(&samples, meta.sample_rate, &chain, |_| {}) };
 
         let host = cpal::default_host();
         let dev = host.default_output_device().ok_or("No output device")?;
@@ -533,20 +550,26 @@ impl AudioState {
         Ok(())
     }
 
-    fn stop(&mut self, shared: &Arc<SharedState>) {
+    fn stop(&mut self, shared: &Arc<SharedState>) -> Reply {
         shared.is_running.store(false, Ordering::Release);
         self.input.take();
         self.output.take();
-        if let Some(h) = self.raw_writer.take()  { h.join_blocking(); }
-        if let Some(h) = self.proc_writer.take() { h.join_blocking(); }
+        let mut errors = Vec::new();
+        if let Some(h) = self.raw_writer.take() {
+            if let Err(e) = h.join_blocking() { errors.push(format!("raw recording: {e}")); }
+        }
+        if let Some(h) = self.proc_writer.take() {
+            if let Err(e) = h.join_blocking() { errors.push(format!("processed recording: {e}")); }
+        }
         if let Some(h) = self.detector.take()    { h.join_blocking(); }
         if let Some(h) = self.spectrum.take()    { h.join_blocking(); }
+        if errors.is_empty() { Ok(()) } else { Err(errors.join("; ")) }
     }
 }
 
 // ─── Workers ───
 
-struct WriterHandle { stop: Arc<AtomicBool>, thread: Option<JoinHandle<()>> }
+struct WriterHandle { stop: Arc<AtomicBool>, thread: Option<JoinHandle<Reply>> }
 
 /// Generic stop+join handle for the detector / spectrum worker threads.
 struct WorkerHandle { stop: Arc<AtomicBool>, thread: Option<JoinHandle<()>> }
@@ -557,34 +580,35 @@ impl WorkerHandle {
     }
 }
 
-fn spawn_writer(
-    path: String, sample_rate: u32, mut cons: ringbuf::HeapCons<f32>,
+fn create_writer(path: &str, sample_rate: u32)
+    -> Result<hound::WavWriter<std::io::BufWriter<std::fs::File>>, String>
+{
+    let spec = hound::WavSpec {
+        channels: 1, sample_rate, bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    hound::WavWriter::create(path, spec).map_err(|e| format!("WAV create {path}: {e}"))
+}
+
+fn spawn_writer<W: std::io::Write + std::io::Seek + Send + 'static>(
+    mut writer: hound::WavWriter<W>, mut cons: ringbuf::HeapCons<f32>,
 ) -> WriterHandle {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_t = Arc::clone(&stop);
     let thread = thread::spawn(move || {
-        let spec = hound::WavSpec {
-            channels: 1, sample_rate,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
-        };
-        let mut writer = match hound::WavWriter::create(&path, spec) {
-            Ok(w) => w,
-            Err(e) => { log::error!("WAV create {}: {}", path, e); return; }
-        };
         let mut scratch = [0.0f32; 1024];
         loop {
             let n = cons.pop_slice(&mut scratch);
             if n > 0 {
                 for &s in &scratch[..n] {
                     let v = (s * 32767.0).clamp(-32768.0, 32767.0) as i16;
-                    let _ = writer.write_sample(v);
+                    writer.write_sample(v).map_err(|e| format!("WAV write: {e}"))?;
                 }
             } else if stop_t.load(Ordering::Acquire) {
                 while cons.occupied_len() > 0 {
                     if let Some(s) = cons.try_pop() {
                         let v = (s * 32767.0).clamp(-32768.0, 32767.0) as i16;
-                        let _ = writer.write_sample(v);
+                        writer.write_sample(v).map_err(|e| format!("WAV write: {e}"))?;
                     } else { break; }
                 }
                 break;
@@ -592,17 +616,18 @@ fn spawn_writer(
                 thread::sleep(Duration::from_millis(5));
             }
         }
-        if let Err(e) = writer.finalize() {
-            log::error!("WAV finalize: {}", e);
-        }
+        writer.finalize().map_err(|e| format!("WAV finalize: {e}"))
     });
     WriterHandle { stop, thread: Some(thread) }
 }
 
 impl WriterHandle {
-    fn join_blocking(mut self) {
+    fn join_blocking(mut self) -> Reply {
         self.stop.store(true, Ordering::Release);
-        if let Some(t) = self.thread.take() { let _ = t.join(); }
+        match self.thread.take() {
+            Some(t) => t.join().map_err(|_| "recording writer panicked".to_string())?,
+            None => Ok(()),
+        }
     }
 }
 
@@ -680,4 +705,105 @@ fn spawn_detector(
         }
     });
     WorkerHandle { stop, thread: Some(thread) }
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+    use crate::effects::{AutoTune, MusicalKey, Scale, NoiseGate};
+    use std::io::{self, Cursor, Seek, SeekFrom, Write};
+
+    #[test]
+    fn file_renderer_applies_queued_parameters_and_enabled_state() {
+        let slot = Arc::new(EffectSlot::new(Box::new(NoiseGate::new(-80.0, 1.0, 1.0))));
+        let input = vec![0.25; 4096];
+        slot.queue_param("threshold_db", 0.0);
+        let chain = vec![slot.clone()];
+        let muted = unsafe { render_samples(&input, 48000, &chain, |_| {}) };
+        assert!(muted[2048..].iter().all(|s| s.abs() < 1e-4));
+        slot.queue_param("threshold_db", -80.0);
+        let audible = unsafe { render_samples(&input, 48000, &chain, |_| {}) };
+        assert!(audible[2048..].iter().all(|s| *s > 0.24));
+        slot.set_enabled(false);
+        assert_eq!(unsafe { render_samples(&input, 48000, &chain, |_| {}) }, input);
+        slot.set_enabled(true);
+        slot.queue_param("threshold_db", 0.0);
+        let muted_again = unsafe { render_samples(&input, 48000, &chain, |_| {}) };
+        assert!(muted_again[2048..].iter().all(|s| s.abs() < 1e-4));
+    }
+
+    #[test]
+    fn file_autotune_tracks_changing_notes_and_repeated_renders() {
+        let tune = AutoTune::new(MusicalKey::C, Scale::Chromatic, 0.0);
+        let detector = tune.shared();
+        let chain = vec![Arc::new(EffectSlot::with_detect(Box::new(tune), Some(detector)))];
+        let input: Vec<f32> = (0..38400).map(|i| {
+            let hz = if i < 19200 { 225.0 } else { 450.0 };
+            (2.0 * std::f32::consts::PI * hz * i as f32 / 48000.0).sin() * 0.4
+        }).collect();
+        for _ in 0..2 {
+            let output = unsafe { render_samples(&input, 48000, &chain, |_| {}) };
+            let mut yin = YinDetector::new(2048);
+            for (start, expected) in [(10000, 220.0), (30000, 440.0)] {
+                let (hz, confidence) = yin.detect(&output[start..start + 2048], 48000).unwrap();
+                assert!(confidence > 0.9);
+                assert!((hz - expected).abs() < 2.0, "expected {expected}, got {hz}");
+            }
+        }
+    }
+
+    struct FailingSink {
+        data: Cursor<Vec<u8>>,
+        fail_write: Arc<AtomicBool>,
+        fail_seek: Arc<AtomicBool>,
+    }
+    impl Write for FailingSink {
+        fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+            if self.fail_write.load(Ordering::Relaxed) { return Err(io::Error::other("disk full")); }
+            self.data.write(data)
+        }
+        fn flush(&mut self) -> io::Result<()> { Ok(()) }
+    }
+    impl Seek for FailingSink {
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+            if self.fail_seek.load(Ordering::Relaxed) { return Err(io::Error::other("header seek failed")); }
+            self.data.seek(pos)
+        }
+    }
+
+    fn failing_writer(finalize: bool) -> WriterHandle {
+        let fail_write = Arc::new(AtomicBool::new(false));
+        let fail_seek = Arc::new(AtomicBool::new(false));
+        let sink = FailingSink { data: Cursor::new(Vec::new()), fail_write: fail_write.clone(), fail_seek: fail_seek.clone() };
+        let writer = hound::WavWriter::new(sink, hound::WavSpec {
+            channels: 1, sample_rate: 48000, bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        }).unwrap();
+        let (mut producer, consumer) = HeapRb::<f32>::new(16).split();
+        if finalize { fail_seek.store(true, Ordering::Relaxed); }
+        else {
+            fail_write.store(true, Ordering::Relaxed);
+            producer.try_push(0.5).unwrap();
+        }
+        spawn_writer(writer, consumer)
+    }
+
+    #[test]
+    fn recording_creation_error_is_returned() {
+        let err = create_writer(std::env::temp_dir().to_str().unwrap(), 48000).err().unwrap();
+        assert!(err.contains("WAV create"));
+    }
+
+    #[test]
+    fn recording_write_and_finalize_errors_reach_stop_and_all_workers_join() {
+        let runtime = AudioRuntime::new(48000, 256);
+        let mut state = AudioState::new();
+        state.raw_writer = Some(failing_writer(false));
+        state.proc_writer = Some(failing_writer(true));
+        let error = state.stop(&runtime.shared).unwrap_err();
+        assert!(error.contains("raw recording: WAV write: disk full"), "{error}");
+        assert!(error.contains("processed recording: WAV finalize:"), "{error}");
+        assert!(state.raw_writer.is_none() && state.proc_writer.is_none());
+        assert!(state.stop(&runtime.shared).is_ok());
+    }
 }
