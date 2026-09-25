@@ -58,8 +58,8 @@ impl AudioEffect for Limiter {
 
     fn process(&mut self, buffer: &mut [f32], sample_rate: u32) {
         if !self.enabled.get() { return; }
-        let ceil = 10.0_f32.powf(self.ceiling_db.get() / 20.0);
-        let rel = (-1.0 / (self.release_ms.get() * 0.001 * sample_rate as f32).max(1.0)).exp();
+        let ceil = 10.0_f32.powf(self.ceiling_db.get().clamp(-30.0, 0.0) / 20.0);
+        let rel = (-1.0 / (self.release_ms.get().clamp(1.0, 2000.0) * 0.001 * sample_rate as f32).max(1.0)).exp();
         // Attack reaches ~99.3% of a gain step within the lookahead window.
         let att = (-5.0 / LOOKAHEAD as f32).exp();
         for s in buffer.iter_mut() {

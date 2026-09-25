@@ -1,9 +1,9 @@
 use crate::graph::*;
 use std::f32::consts::PI;
 
-struct Biquad { b0: f32, b1: f32, b2: f32, a1: f32, a2: f32, z1: f32, z2: f32 }
+struct Biquad { b0: f32, b1: f32, b2: f32, a1: f32, a2: f32, z1: f32, z2: f32, dirty: bool }
 impl Biquad {
-    fn new() -> Self { Self { b0:1.0,b1:0.0,b2:0.0,a1:0.0,a2:0.0,z1:0.0,z2:0.0 } }
+    fn new() -> Self { Self { b0:1.0,b1:0.0,b2:0.0,a1:0.0,a2:0.0,z1:0.0,z2:0.0,dirty:true } }
     fn calc_peaking(&mut self, freq: f32, gain_db: f32, q: f32, sr: f32) {
         let a = 10.0_f32.powf(gain_db / 40.0);
         let w0 = 2.0 * PI * freq / sr;
@@ -30,7 +30,11 @@ pub struct EqBand {
     pub gain_db: AtomicF32,
     pub q: AtomicF32,
     filter: Biquad,
-    prev_freq: f32, prev_gain: f32, prev_q: f32,
+    /// Audio-thread glide state (log-frequency, dB, Q) and the stream rate the
+    /// coefficients were computed for.
+    cur_log_f: f32, cur_gain: f32, cur_q: f32,
+    coeff_sr: f32,
+    primed: bool,
 }
 
 impl EqBand {
@@ -38,17 +42,44 @@ impl EqBand {
         Self {
             freq: AtomicF32::new(freq), gain_db: AtomicF32::new(gain_db),
             q: AtomicF32::new(q), filter: Biquad::new(),
-            prev_freq: -1.0, prev_gain: -999.0, prev_q: -1.0,
+            cur_log_f: 0.0, cur_gain: 0.0, cur_q: 1.0, coeff_sr: 0.0, primed: false,
         }
     }
-    fn update_if_dirty(&mut self, sr: f32) {
-        let f = self.freq.get(); let g = self.gain_db.get(); let q = self.q.get();
-        if (f - self.prev_freq).abs() > 0.01 || (g - self.prev_gain).abs() > 0.01
-            || (q - self.prev_q).abs() > 0.001 {
-            self.filter.calc_peaking(f, g, q, sr);
-            self.prev_freq = f; self.prev_gain = g; self.prev_q = q;
+
+    /// Clamp targets to a range that is always stable at `sr`.
+    fn targets(&self, sr: f32) -> (f32, f32, f32) {
+        let f = self.freq.get().clamp(10.0, sr * 0.45);
+        let g = self.gain_db.get().clamp(-24.0, 24.0);
+        let q = self.q.get().clamp(0.1, 20.0);
+        (f.ln(), g, q)
+    }
+
+    /// Glide toward the targets once per buffer (`glide` = one-pole weight)
+    /// and recompute coefficients only while moving or after a rate change.
+    fn update(&mut self, sr: f32, glide: f32) {
+        let (lf, g, q) = self.targets(sr);
+        let rate_changed = sr != self.coeff_sr;
+        if !self.primed {
+            self.cur_log_f = lf; self.cur_gain = g; self.cur_q = q;
+            self.primed = true;
+        } else {
+            self.cur_log_f += (lf - self.cur_log_f) * glide;
+            self.cur_gain += (g - self.cur_gain) * glide;
+            self.cur_q += (q - self.cur_q) * glide;
+            // Snap the last hair so settled bands stop recomputing.
+            if (lf - self.cur_log_f).abs() < 1e-4 { self.cur_log_f = lf; }
+            if (g - self.cur_gain).abs() < 1e-3 { self.cur_gain = g; }
+            if (q - self.cur_q).abs() < 1e-4 { self.cur_q = q; }
+        }
+        let moving = self.cur_log_f != lf || self.cur_gain != g || self.cur_q != q;
+        if rate_changed || moving || self.filter.dirty {
+            self.filter.calc_peaking(self.cur_log_f.exp(), self.cur_gain, self.cur_q, sr);
+            self.filter.dirty = moving;
+            self.coeff_sr = sr;
         }
     }
+
+    fn snap(&mut self) { self.primed = false; }
 }
 
 pub struct Equalizer {
@@ -96,7 +127,9 @@ impl AudioEffect for Equalizer {
     fn process(&mut self, buffer: &mut [f32], sample_rate: u32) {
         if !self.enabled.get() { return; }
         let sr = sample_rate as f32;
-        for band in &mut self.bands { band.update_if_dirty(sr); }
+        // ~20 ms glide so dragging a band never steps the coefficients.
+        let glide = 1.0 - (-(buffer.len() as f32) / (0.02 * sr)).exp();
+        for band in &mut self.bands { band.update(sr, glide); }
         for sample in buffer.iter_mut() {
             for band in &mut self.bands {
                 *sample = band.filter.tick(*sample);
@@ -105,6 +138,6 @@ impl AudioEffect for Equalizer {
     }
 
     fn reset(&mut self) {
-        for band in &mut self.bands { band.filter.reset(); }
+        for band in &mut self.bands { band.filter.reset(); band.snap(); }
     }
 }

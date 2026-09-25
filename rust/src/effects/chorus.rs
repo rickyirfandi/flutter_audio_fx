@@ -39,14 +39,14 @@ impl AudioEffect for Chorus {
     fn process(&mut self, buffer: &mut [f32], sample_rate: u32) {
         if !self.enabled.get() { return; }
         let sr = sample_rate as f32;
-        let rate = self.rate_hz.get();
+        let rate = self.rate_hz.get().clamp(0.0, 10.0);
         let coeff = smooth_coeff(sr, 15.0);
         let inc = rate / sr;
         let sweep = SWEEP_S * sr;
         let base = (BASE_DELAY_S * sr).min((BUF_LEN - 2) as f32 - sweep);
         for s in buffer.iter_mut() {
-            let depth = self.depth.tick(coeff);
-            let mix = self.mix.tick(coeff);
+            let depth = self.depth.tick(coeff).clamp(0.0, 1.0);
+            let mix = self.mix.tick(coeff).clamp(0.0, 1.0);
             let dry = *s;
             self.buffer[self.write_pos] = dry;
             self.write_pos = (self.write_pos + 1) % self.buffer.len();

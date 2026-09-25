@@ -76,7 +76,7 @@ pub fn read_wav_mono(path: &str) -> Result<(Vec<f32>, AudioFileMeta), String> {
     Ok((mono, meta))
 }
 
-/// Write samples to a WAV file (16-bit PCM)
+/// Write samples to a WAV file (16-bit PCM, TPDF-dithered)
 pub fn write_wav(path: &str, samples: &[f32], sample_rate: u32, channels: u16) -> Result<(), String> {
     let spec = hound::WavSpec {
         channels,
@@ -88,9 +88,9 @@ pub fn write_wav(path: &str, samples: &[f32], sample_rate: u32, channels: u16) -
     let mut writer = hound::WavWriter::create(path, spec)
         .map_err(|e| format!("Failed to create WAV: {}", e))?;
 
+    let mut dither = crate::util::Dither16::new(0x9E37_79B9);
     for &sample in samples {
-        let val = (sample * 32767.0).max(-32768.0).min(32767.0) as i16;
-        writer.write_sample(val)
+        writer.write_sample(dither.quantize(sample))
             .map_err(|e| format!("WAV write error: {}", e))?;
     }
 

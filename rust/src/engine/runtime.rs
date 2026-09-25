@@ -1,12 +1,12 @@
 use std::sync::{Arc, Mutex, mpsc};
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{SampleRate, StreamConfig, SupportedStreamConfig};
-use ringbuf::{HeapRb, traits::{Producer, Consumer, Split, Observer}};
+use cpal::{FromSample, SampleFormat, SampleRate, SizedSample, StreamConfig, SupportedStreamConfig};
+use ringbuf::{HeapCons, HeapProd, HeapRb, traits::{Producer, Consumer, Split, Observer}};
 
 #[allow(unused_imports)]
 use crate::graph::{AudioEffect, EffectSlot};
@@ -14,6 +14,8 @@ use crate::analysis::spectrum::{SpectrumAnalyzer, SpectrumData};
 use crate::analysis::pitch::YinDetector;
 use crate::effects::auto_tune::DetectShared;
 use crate::io::file_io;
+use crate::util::{DenormalGuard, Dither16};
+use super::resample::{self, Resampler};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Mode { Idle = 0, Realtime = 1, Recording = 2, Preview = 3 }
@@ -238,6 +240,7 @@ unsafe fn render_samples(
     samples: &[f32], sample_rate: u32, chain: &[Arc<EffectSlot>],
     mut progress: impl FnMut(f32),
 ) -> Vec<f32> {
+    let _ftz = DenormalGuard::new();
     let detectors: Vec<_> = chain.iter().filter_map(|s| s.detect_shared()).collect();
     let mut yin = YinDetector::new(2048);
     let mut window = vec![0.0; yin.window()];
@@ -308,42 +311,260 @@ struct AudioState {
     spectrum: Option<WorkerHandle>,
 }
 
-/// Pick an input config that supports `desired_sr` (preferring the fewest
-/// channels), falling back to the device default if it does not.
-fn choose_input_config(dev: &cpal::Device, desired_sr: u32) -> Result<SupportedStreamConfig, String> {
-    if let Ok(ranges) = dev.supported_input_configs() {
-        let mut best: Option<SupportedStreamConfig> = None;
-        for range in ranges {
-            if range.min_sample_rate().0 <= desired_sr && desired_sr <= range.max_sample_rate().0 {
-                let cfg = range.with_sample_rate(SampleRate(desired_sr));
-                best = Some(match best {
-                    Some(b) if b.channels() <= cfg.channels() => b,
-                    _ => cfg,
-                });
-            }
-        }
-        if let Some(b) = best { return Ok(b); }
-    }
-    dev.default_input_config().map_err(|e| format!("input config: {e}"))
+/// Sample formats the live/preview paths can drive (converted to/from f32).
+fn format_supported(f: SampleFormat) -> bool {
+    matches!(f, SampleFormat::F32 | SampleFormat::I16 | SampleFormat::I32 | SampleFormat::U16)
 }
 
-/// Pick an output config at exactly `sr` (preferring the fewest channels),
-/// falling back to the device default if `sr` is unsupported.
-fn choose_output_config(dev: &cpal::Device, sr: u32) -> Result<SupportedStreamConfig, String> {
-    if let Ok(ranges) = dev.supported_output_configs() {
-        let mut best: Option<SupportedStreamConfig> = None;
-        for range in ranges {
-            if range.min_sample_rate().0 <= sr && sr <= range.max_sample_rate().0 {
-                let cfg = range.with_sample_rate(SampleRate(sr));
-                best = Some(match best {
-                    Some(b) if b.channels() <= cfg.channels() => b,
-                    _ => cfg,
+/// Pick a stream config at `desired_sr`, preferring native f32, then the
+/// fewest channels; fall back to the device default when `desired_sr` is not
+/// offered (the resampler bridges the difference).
+fn choose_config(
+    ranges: Option<Vec<cpal::SupportedStreamConfigRange>>,
+    default: Result<SupportedStreamConfig, String>,
+    desired_sr: u32,
+) -> Result<SupportedStreamConfig, String> {
+    let best = ranges.unwrap_or_default().into_iter()
+        .filter(|r| format_supported(r.sample_format())
+            && r.min_sample_rate().0 <= desired_sr && desired_sr <= r.max_sample_rate().0)
+        .min_by_key(|r| (r.sample_format() != SampleFormat::F32, r.channels()))
+        .map(|r| r.with_sample_rate(SampleRate(desired_sr)));
+    match best {
+        Some(cfg) => Ok(cfg),
+        None => {
+            let cfg = default?;
+            if format_supported(cfg.sample_format()) { Ok(cfg) }
+            else { Err(format!("unsupported device sample format {:?}", cfg.sample_format())) }
+        }
+    }
+}
+
+fn choose_input_config(dev: &cpal::Device, desired_sr: u32) -> Result<SupportedStreamConfig, String> {
+    choose_config(
+        dev.supported_input_configs().ok().map(|r| r.collect()),
+        dev.default_input_config().map_err(|e| format!("input config: {e}")),
+        desired_sr)
+}
+
+fn choose_output_config(dev: &cpal::Device, desired_sr: u32) -> Result<SupportedStreamConfig, String> {
+    choose_config(
+        dev.supported_output_configs().ok().map(|r| r.collect()),
+        dev.default_output_config().map_err(|e| format!("output config: {e}")),
+        desired_sr)
+}
+
+/// Build an input stream in the device's native sample format.
+macro_rules! build_input_as {
+    ($dev:expr, $cfg:expr, $sink:ident, $($fmt:ident => $t:ty),*) => {{
+        let sc: StreamConfig = $cfg.config();
+        match $cfg.sample_format() {
+            $(SampleFormat::$fmt => $dev.build_input_stream(
+                &sc,
+                move |d: &[$t], _: &cpal::InputCallbackInfo| $sink.push(d),
+                |err| log::error!("Input error: {}", err),
+                None,
+            ).map_err(|e| format!("Input stream: {}", e)),)*
+            f => Err(format!("unsupported input sample format {f:?}")),
+        }
+    }};
+}
+
+/// Build an output stream in the device's native sample format.
+macro_rules! build_output_as {
+    ($dev:expr, $cfg:expr, $renderer:ident, $label:literal, $($fmt:ident => $t:ty),*) => {{
+        let sc: StreamConfig = $cfg.config();
+        match $cfg.sample_format() {
+            $(SampleFormat::$fmt => $dev.build_output_stream(
+                &sc,
+                move |d: &mut [$t], _: &cpal::OutputCallbackInfo| $renderer.render(d),
+                |err| log::error!(concat!($label, " error: {}"), err),
+                None,
+            ).map_err(|e| format!(concat!($label, " stream: {}"), e)),)*
+            f => Err(format!("unsupported output sample format {f:?}")),
+        }
+    }};
+}
+
+/// Input callback state: downmix to mono and fan out to the taps.
+struct InputSink {
+    mic: HeapProd<f32>,
+    raw: Option<HeapProd<f32>>,
+    det: HeapProd<f32>,
+    channels: usize,
+    shared: Arc<SharedState>,
+    /// Frames per input callback, read by the output drift controller.
+    block: Arc<AtomicUsize>,
+}
+
+impl InputSink {
+    fn push<T: SizedSample>(&mut self, data: &[T]) where f32: FromSample<T> {
+        if !self.shared.is_running.load(Ordering::Relaxed) { return; }
+        let ch = self.channels;
+        self.block.store(data.len() / ch, Ordering::Relaxed);
+        let scale = 1.0 / ch as f32;
+        for frame in data.chunks_exact(ch) {
+            let mut acc = 0.0f32;
+            for &x in frame { acc += <f32 as FromSample<T>>::from_sample_(x); }
+            let s = acc * scale;
+            let _ = self.mic.try_push(s);
+            if let Some(raw) = self.raw.as_mut() { let _ = raw.try_push(s); }
+            let _ = self.det.try_push(s);
+        }
+    }
+}
+
+/// Largest host buffer rendered in one pass; bigger callbacks are chunked so
+/// the scratch never reallocates on the audio thread.
+const MAX_BLOCK: usize = 8192;
+
+/// Live output callback state.
+///
+/// Input and output devices run on independent clocks (and possibly different
+/// nominal rates). The mic ring is read through a band-limited resampler whose
+/// ratio is trimmed by a slow proportional controller holding the ring fill
+/// near the smallest safe level: latency stays minimal and constant, and drift
+/// is absorbed as an inaudible (<= 8.6 cent, typically < 0.5 cent) rate trim
+/// instead of dropped or repeated samples. The integral term removes the
+/// steady-state fill error a proportional-only loop would leave (which would
+/// eat into the underrun cushion). Underruns widen the cushion automatically.
+struct OutputRenderer {
+    mic: HeapCons<f32>,
+    rs: Resampler,
+    base_ratio: f64,
+    in_block: Arc<AtomicUsize>,
+    in_rate: f32,
+    sr: u32,
+    avg_fill: f32,
+    fill_init: bool,
+    /// Integral of the relative fill error (PI controller state).
+    drift_integral: f64,
+    /// Jitter-buffer prefill: play silence until the ring first reaches its
+    /// target, so start-up is not a burst of underruns.
+    primed: bool,
+    margin: usize,
+    max_margin: usize,
+    last_in: f32,
+    mono: Vec<f32>,
+    channels: usize,
+    shared: Arc<SharedState>,
+    proc: Option<HeapProd<f32>>,
+    spec: HeapProd<f32>,
+}
+
+impl OutputRenderer {
+    fn render<T: SizedSample + FromSample<f32>>(&mut self, data: &mut [T]) {
+        let _ftz = DenormalGuard::new();
+        let frames = data.len() / self.channels;
+        if !self.update_drift(frames) {
+            for s in data.iter_mut() { *s = T::from_sample(0.0f32); }
+            self.shared.rms_level.set(0.0);
+            return;
+        }
+        let chain = self.shared.chain.load();
+        let mut sum_sq = 0.0f32;
+        for block in data.chunks_mut(MAX_BLOCK * self.channels) {
+            let n = block.len() / self.channels;
+            let mono = &mut self.mono[..n];
+            let mic = &mut self.mic;
+            let last = &mut self.last_in;
+            let mut starved = false;
+            for s in mono.iter_mut() {
+                *s = self.rs.next(|| match mic.try_pop() {
+                    Some(x) => { *last = x; x }
+                    None => { starved = true; *last *= 0.995; *last }
                 });
             }
+            if starved {
+                // Grow the cushion by 1 ms per underrun (bounded).
+                self.margin = (self.margin + (self.in_rate * 0.001) as usize).min(self.max_margin);
+            }
+            for slot in chain.iter() {
+                // SAFETY: the cpal output callback is the unique DSP thread.
+                unsafe { slot.process_in_place(mono, self.sr); }
+            }
+            for (frame, &v) in block.chunks_exact_mut(self.channels).zip(mono.iter()) {
+                let out = T::from_sample(v);
+                for c in frame { *c = out; }
+            }
+            if let Some(p) = self.proc.as_mut() {
+                for &v in mono.iter() { let _ = p.try_push(v); }
+            }
+            for &v in mono.iter() {
+                let _ = self.spec.try_push(v);
+                sum_sq += v * v;
+            }
         }
-        if let Some(b) = best { return Ok(b); }
+        if frames > 0 {
+            self.shared.rms_level.set((sum_sq / frames as f32).sqrt());
+        }
     }
-    dev.default_output_config().map_err(|e| format!("output config: {e}"))
+
+    /// Trim the resampler ratio toward the target fill. Returns false while
+    /// still prefilling (the caller outputs silence).
+    fn update_drift(&mut self, frames: usize) -> bool {
+        let fill = self.mic.occupied_len();
+        let need = (frames as f64 * self.base_ratio).ceil() as usize;
+        let in_block = self.in_block.load(Ordering::Relaxed);
+        let target = (need + in_block + self.margin).max(1) as f32;
+        if !self.primed {
+            if (fill as f32) < target { return false; }
+            self.primed = true;
+        }
+        if !self.fill_init {
+            self.avg_fill = fill as f32;
+            self.fill_init = true;
+        }
+        // ~0.5 s averaging smooths the sawtooth of block-wise arrivals.
+        let alpha = (frames as f32 / (self.sr as f32 * 0.5)).min(1.0);
+        self.avg_fill += (fill as f32 - self.avg_fill) * alpha;
+        // Far over target (startup burst, app resumed from background):
+        // discard the backlog once rather than trimming it out over seconds.
+        let hard = target as usize + (self.in_rate * 0.03) as usize;
+        if fill > hard {
+            self.mic.skip(fill - target as usize);
+            self.avg_fill = target;
+        }
+        let err = ((self.avg_fill - target) / target).clamp(-1.0, 1.0) as f64;
+        // PI: Kp = 2000 ppm per 100 % fill error; integral time ~10 s.
+        const KP: f64 = 0.002;
+        const TI: f64 = 10.0;
+        let dt = frames as f64 / self.sr as f64;
+        self.drift_integral = (self.drift_integral + err * dt).clamp(-TI * 1.5, TI * 1.5);
+        let trim = (KP * (err + self.drift_integral / TI)).clamp(-0.005, 0.005);
+        self.rs.set_ratio(self.base_ratio * (1.0 + trim));
+        true
+    }
+}
+
+/// Preview callback state: plays a pre-rendered buffer, resampled to the
+/// device rate when the file's rate is not offered.
+struct PreviewRenderer {
+    data: Arc<Vec<f32>>,
+    pos: usize,
+    rs: Resampler,
+    channels: usize,
+    shared: Arc<SharedState>,
+}
+
+impl PreviewRenderer {
+    fn render<T: SizedSample + FromSample<f32>>(&mut self, out: &mut [T]) {
+        // Play past the end by the resampler delay so the tail is not cut.
+        let end = self.data.len() + resample::LATENCY;
+        for frame in out.chunks_exact_mut(self.channels) {
+            let data = &self.data;
+            let pos = &mut self.pos;
+            let v = self.rs.next(|| {
+                let x = data.get(*pos).copied().unwrap_or(0.0);
+                *pos += 1;
+                x
+            });
+            let o = T::from_sample(v);
+            for c in frame { *c = o; }
+        }
+        if self.pos >= end {
+            self.shared.is_running.store(false, Ordering::Release);
+        }
+    }
 }
 
 impl AudioState {
@@ -364,22 +585,17 @@ impl AudioState {
         let in_dev  = host.default_input_device().ok_or("No input device")?;
         let out_dev = host.default_output_device().ok_or("No output device")?;
 
-        // Negotiate a configuration both devices actually support. We prefer the
-        // engine's requested rate but accept the device's native rate; effects
-        // are sample-rate-aware, so we run the whole chain at `sr` and avoid a
-        // resampler. Input/output must agree on `sr` (no cross-rate resampling).
+        // Each side negotiates independently, preferring the engine rate. The
+        // chain runs at the *output* rate; the resampler bridges any mismatch
+        // (e.g. a 16 kHz Bluetooth mic into a 48 kHz output).
         let in_cfg  = choose_input_config(&in_dev, sample_rate)?;
-        let sr = in_cfg.sample_rate().0;
-        let out_cfg = choose_output_config(&out_dev, sr)?;
-        if out_cfg.sample_rate().0 != sr {
-            return Err(format!(
-                "input/output sample-rate mismatch ({} vs {} Hz); resampling not supported",
-                sr, out_cfg.sample_rate().0));
-        }
+        let out_cfg = choose_output_config(&out_dev, sample_rate)?;
+        let in_sr  = in_cfg.sample_rate().0;
+        let sr     = out_cfg.sample_rate().0;
         let in_channels  = in_cfg.channels() as usize;
         let out_channels = out_cfg.channels() as usize;
-        let in_stream_cfg: StreamConfig  = in_cfg.config();
-        let out_stream_cfg: StreamConfig = out_cfg.config();
+        log::info!("live: in {in_sr} Hz {in_channels}ch {:?}, out {sr} Hz {out_channels}ch {:?}",
+            in_cfg.sample_format(), out_cfg.sample_format());
 
         if sr != 48000 {
             log::warn!(
@@ -387,91 +603,51 @@ impl AudioState {
                  and will pass audio through unchanged at this rate");
         }
 
-        let mic_rb = HeapRb::<f32>::new((sr as usize) / 10);
-        let (mut mic_prod, mut mic_cons) = mic_rb.split();
-        let raw_rb = HeapRb::<f32>::new((sr as usize) * 2);
-        let (mut raw_prod, raw_cons) = raw_rb.split();
-        let proc_rb = HeapRb::<f32>::new((sr as usize) * 2);
-        let (mut proc_prod, proc_cons) = proc_rb.split();
-        let det_rb = HeapRb::<f32>::new((sr as usize) / 4);
-        let (mut det_prod, det_cons) = det_rb.split();
-        let spec_rb = HeapRb::<f32>::new((sr as usize) / 2);
-        let (mut spec_prod, spec_cons) = spec_rb.split();
+        let (mic_prod, mic_cons) = HeapRb::<f32>::new((in_sr as usize) / 5).split();
+        let (raw_prod, raw_cons) = HeapRb::<f32>::new((in_sr as usize) * 2).split();
+        let (proc_prod, proc_cons) = HeapRb::<f32>::new((sr as usize) * 2).split();
+        let (det_prod, det_cons) = HeapRb::<f32>::new((in_sr as usize) / 4).split();
+        let (spec_prod, spec_cons) = HeapRb::<f32>::new((sr as usize) / 2).split();
 
-        let shared_in = Arc::clone(shared);
-        let is_rec = recording;
+        let in_block = Arc::new(AtomicUsize::new(0));
+        let mut sink = InputSink {
+            mic: mic_prod,
+            raw: if recording { Some(raw_prod) } else { None },
+            det: det_prod,
+            channels: in_channels,
+            shared: Arc::clone(shared),
+            block: Arc::clone(&in_block),
+        };
+        let input_stream = build_input_as!(in_dev, in_cfg, sink,
+            F32 => f32, I16 => i16, I32 => i32, U16 => u16)?;
 
-        let input_stream = in_dev.build_input_stream(
-            &in_stream_cfg,
-            move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                if !shared_in.is_running.load(Ordering::Relaxed) { return; }
-                // Downmix interleaved input to mono.
-                let mut i = 0;
-                while i + in_channels <= data.len() {
-                    let mut acc = 0.0f32;
-                    for c in 0..in_channels { acc += data[i + c]; }
-                    let s = acc / in_channels as f32;
-                    let _ = mic_prod.try_push(s);
-                    if is_rec { let _ = raw_prod.try_push(s); }
-                    let _ = det_prod.try_push(s);
-                    i += in_channels;
-                }
-            },
-            |err| log::error!("Input error: {}", err),
-            None,
-        ).map_err(|e| format!("Input stream: {}", e))?;
-
-        let shared_out = Arc::clone(shared);
-        // Reusable mono scratch — generously sized so resize() never allocates
-        // inside the callback for any realistic host buffer.
-        let mut mono: Vec<f32> = Vec::with_capacity(16384);
-        // Input and output devices run on independent clocks, so their rates
-        // differ by up to a few hundred ppm even at the same nominal Hz. Left
-        // uncompensated, the mic ring slowly fills (input faster → dropped
-        // chunks + creeping latency) or starves (output faster → zero-fill
-        // clicks). Watermark correction: above `drift_high`, shed one sample
-        // per callback; on starvation, hold the last sample with a fast decay
-        // instead of a hard zero. One sample per callback absorbs ~4000 ppm —
-        // far beyond real-world drift.
-        let drift_high = (sr as usize) / 20; // 50 ms
-        let mut last_in = 0.0f32;
-        let output_stream = out_dev.build_output_stream(
-            &out_stream_cfg,
-            move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                let frames = data.len() / out_channels;
-                mono.resize(frames, 0.0);
-                if mic_cons.occupied_len() > drift_high {
-                    let _ = mic_cons.try_pop();
-                }
-                for f in 0..frames {
-                    match mic_cons.try_pop() {
-                        Some(s) => { last_in = s; mono[f] = s; }
-                        None => { last_in *= 0.995; mono[f] = last_in; }
-                    }
-                }
-                let chain = shared_out.chain.load();
-                for slot in chain.iter() {
-                    // SAFETY: cpal audio thread is the unique writer.
-                    unsafe { slot.process_in_place(&mut mono[..frames], sr); }
-                }
-                // Upmix mono → interleaved output channels.
-                for f in 0..frames {
-                    let v = mono[f];
-                    for c in 0..out_channels { data[f * out_channels + c] = v; }
-                }
-                if is_rec {
-                    for f in 0..frames { let _ = proc_prod.try_push(mono[f]); }
-                }
-                for f in 0..frames { let _ = spec_prod.try_push(mono[f]); }
-                shared_out.rms_level.set(crate::util::rms(&mono[..frames]));
-            },
-            |err| log::error!("Output error: {}", err),
-            None,
-        ).map_err(|e| format!("Output stream: {}", e))?;
+        let mut renderer = OutputRenderer {
+            mic: mic_cons,
+            rs: Resampler::new(in_sr, sr),
+            base_ratio: in_sr as f64 / sr as f64,
+            in_block,
+            in_rate: in_sr as f32,
+            sr,
+            avg_fill: 0.0,
+            fill_init: false,
+            drift_integral: 0.0,
+            primed: false,
+            margin: (in_sr as usize) / 1000, // 1 ms initial cushion
+            max_margin: (in_sr as usize) / 50, // 20 ms
+            last_in: 0.0,
+            mono: vec![0.0; MAX_BLOCK],
+            channels: out_channels,
+            shared: Arc::clone(shared),
+            proc: if recording { Some(proc_prod) } else { None },
+            spec: spec_prod,
+        };
+        let output_stream = build_output_as!(out_dev, out_cfg, renderer, "Output",
+            F32 => f32, I16 => i16, I32 => i32, U16 => u16)?;
 
         // Open both files before starting capture. Failure must reach the caller,
         // not disappear inside a writer thread after start() reported success.
-        let raw_file = if recording { raw_path.as_deref().map(|p| create_writer(p, sr)).transpose()? } else { None };
+        // The raw take is at the mic rate, the processed take at the chain rate.
+        let raw_file = if recording { raw_path.as_deref().map(|p| create_writer(p, in_sr)).transpose()? } else { None };
         let proc_file = if recording { proc_path.as_deref().map(|p| create_writer(p, sr)).transpose()? } else { None };
 
         input_stream.play().map_err(|e| format!("Play input: {}", e))?;
@@ -485,7 +661,7 @@ impl AudioState {
 
         if let Some(writer) = raw_file { self.raw_writer = Some(spawn_writer(writer, raw_cons)); }
         if let Some(writer) = proc_file { self.proc_writer = Some(spawn_writer(writer, proc_cons)); }
-        self.detector = Some(spawn_detector(sr, det_cons, Arc::clone(shared)));
+        self.detector = Some(spawn_detector(in_sr, det_cons, Arc::clone(shared)));
         self.spectrum = Some(spawn_spectrum(sr, spec_cons, Arc::clone(shared)));
 
         self.input = Some(input_stream);
@@ -506,38 +682,15 @@ impl AudioState {
         let host = cpal::default_host();
         let dev = host.default_output_device().ok_or("No output device")?;
         let out_cfg = choose_output_config(&dev, meta.sample_rate)?;
-        if out_cfg.sample_rate().0 != meta.sample_rate {
-            return Err(format!(
-                "output device does not support {} Hz (resampling not supported)",
-                meta.sample_rate));
-        }
-        let out_channels = out_cfg.channels() as usize;
-        let stream_cfg: StreamConfig = out_cfg.config();
-        let data = Arc::new(processed);
-        let pos_idx = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let pp = Arc::clone(&pos_idx);
-        let dd = Arc::clone(&data);
-        let shared_p = Arc::clone(shared);
-
-        let stream = dev.build_output_stream(
-            &stream_cfg,
-            move |out: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                let frames = out.len() / out_channels;
-                let mut p = pp.load(Ordering::Relaxed);
-                for f in 0..frames {
-                    let v = if p < dd.len() {
-                        let x = dd[p]; p += 1; x
-                    } else {
-                        shared_p.is_running.store(false, Ordering::Release);
-                        0.0
-                    };
-                    for c in 0..out_channels { out[f * out_channels + c] = v; }
-                }
-                pp.store(p, Ordering::Relaxed);
-            },
-            |e| log::error!("Preview error: {}", e),
-            None,
-        ).map_err(|e| format!("Preview stream: {}", e))?;
+        let mut renderer = PreviewRenderer {
+            data: Arc::new(processed),
+            pos: 0,
+            rs: Resampler::new(meta.sample_rate, out_cfg.sample_rate().0),
+            channels: out_cfg.channels() as usize,
+            shared: Arc::clone(shared),
+        };
+        let stream = build_output_as!(dev, out_cfg, renderer, "Preview",
+            F32 => f32, I16 => i16, I32 => i32, U16 => u16)?;
         // Set before play(): the callback clears this flag at end-of-file, so
         // storing it afterwards could race a very short file and wedge the
         // engine in "running". A failed build/play leaves it false.
@@ -597,18 +750,17 @@ fn spawn_writer<W: std::io::Write + std::io::Seek + Send + 'static>(
     let stop_t = Arc::clone(&stop);
     let thread = thread::spawn(move || {
         let mut scratch = [0.0f32; 1024];
+        let mut dither = Dither16::new(0x2545_F491);
         loop {
             let n = cons.pop_slice(&mut scratch);
             if n > 0 {
                 for &s in &scratch[..n] {
-                    let v = (s * 32767.0).clamp(-32768.0, 32767.0) as i16;
-                    writer.write_sample(v).map_err(|e| format!("WAV write: {e}"))?;
+                    writer.write_sample(dither.quantize(s)).map_err(|e| format!("WAV write: {e}"))?;
                 }
             } else if stop_t.load(Ordering::Acquire) {
                 while cons.occupied_len() > 0 {
                     if let Some(s) = cons.try_pop() {
-                        let v = (s * 32767.0).clamp(-32768.0, 32767.0) as i16;
-                        writer.write_sample(v).map_err(|e| format!("WAV write: {e}"))?;
+                        writer.write_sample(dither.quantize(s)).map_err(|e| format!("WAV write: {e}"))?;
                     } else { break; }
                 }
                 break;
@@ -750,6 +902,94 @@ mod regression_tests {
                 assert!((hz - expected).abs() < 2.0, "expected {expected}, got {hz}");
             }
         }
+    }
+
+    /// Simulate independent input/output clocks through the live renderer.
+    /// Returns (final ring fill, final safety margin, output tail).
+    fn run_drift(ppm: f64, in_rate: u32, out_rate: u32) -> (usize, usize, Vec<f32>) {
+        let runtime = AudioRuntime::new(out_rate, 256);
+        let (mut prod, cons) = HeapRb::<f32>::new(in_rate as usize / 5).split();
+        let (spec_prod, _spec_cons) = HeapRb::<f32>::new(1024).split();
+        let in_block = 192usize;
+        let block = Arc::new(AtomicUsize::new(in_block));
+        let mut r = OutputRenderer {
+            mic: cons,
+            rs: Resampler::new(in_rate, out_rate),
+            base_ratio: in_rate as f64 / out_rate as f64,
+            in_block: block,
+            in_rate: in_rate as f32,
+            sr: out_rate,
+            avg_fill: 0.0,
+            fill_init: false,
+            drift_integral: 0.0,
+            primed: false,
+            margin: in_rate as usize / 1000,
+            max_margin: in_rate as usize / 50,
+            last_in: 0.0,
+            mono: vec![0.0; MAX_BLOCK],
+            channels: 1,
+            shared: Arc::clone(&runtime.shared),
+            proc: None,
+            spec: spec_prod,
+        };
+        let in_period = in_block as f64 / (in_rate as f64 * (1.0 + ppm * 1e-6));
+        let out_period = 256.0 / out_rate as f64;
+        let (mut t_in, mut t_out, mut n) = (0.0f64, 0.0f64, 0u64);
+        let mut out = vec![0.0f32; 256];
+        let mut tail = Vec::new();
+        let seconds = 60.0;
+        while t_out < seconds {
+            if t_in <= t_out {
+                for _ in 0..in_block {
+                    let ph = 2.0 * std::f64::consts::PI * 1000.0 * n as f64 / in_rate as f64;
+                    let _ = prod.try_push((ph.sin() * 0.5) as f32);
+                    n += 1;
+                }
+                t_in += in_period;
+            } else {
+                r.render(&mut out[..]);
+                if t_out > seconds - 1.0 { tail.extend_from_slice(&out); }
+                t_out += out_period;
+            }
+        }
+        (r.mic.occupied_len(), r.margin, tail)
+    }
+
+    #[test]
+    fn live_path_absorbs_clock_drift_cleanly() {
+        for ppm in [-300.0, 0.0, 300.0] {
+            let (fill, margin, tail) = run_drift(ppm, 48000, 48000);
+            // Latency stays small and bounded (<= ~10 ms of buffered input).
+            assert!(fill < 480, "{ppm} ppm: ring fill grew to {fill}");
+            // At most a couple of start-up underruns widened the cushion.
+            assert!(margin <= 48 * 3, "{ppm} ppm: repeated underruns, margin {margin}");
+            // The tone is reproduced cleanly (no dropped/held samples). The
+            // window is short (85 ms) because the controller's residual
+            // +/-60 ppm trim wobble (0.1 cent) would otherwise smear a
+            // fixed-frequency correlation over a whole second.
+            let tail = &tail[tail.len() - 4096..];
+            let f = 1000.0 * (1.0 + ppm as f32 * 1e-6);
+            let (mut re, mut im) = (0.0f64, 0.0f64);
+            for (i, &s) in tail.iter().enumerate() {
+                let p = 2.0 * std::f64::consts::PI * f as f64 * i as f64 / 48000.0;
+                re += s as f64 * p.cos();
+                im -= s as f64 * p.sin();
+            }
+            let amp = 2.0 * (re * re + im * im).sqrt() / tail.len() as f64;
+            let energy: f64 = tail.iter().map(|s| (*s as f64).powi(2)).sum::<f64>() / tail.len() as f64;
+            let purity = amp * amp / 2.0 / energy;
+            assert!(purity > 0.999, "{ppm} ppm: purity {purity}");
+        }
+    }
+
+    #[test]
+    fn live_path_bridges_bluetooth_mic_rate() {
+        // 16 kHz headset mic into a 48 kHz output: previously a start error.
+        let (fill, margin, tail) = run_drift(0.0, 16000, 48000);
+        assert!(fill < 16000 / 50, "ring fill {fill}");
+        assert!(margin <= 16 * 3, "margin {margin}");
+        let energy: f32 = tail.iter().map(|s| s * s).sum::<f32>() / tail.len() as f32;
+        assert!((energy.sqrt() - 0.5 / std::f32::consts::SQRT_2).abs() < 0.02, "level {}", energy.sqrt());
     }
 
     struct FailingSink {

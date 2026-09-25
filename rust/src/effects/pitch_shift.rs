@@ -32,8 +32,17 @@ pub struct PitchShift {
 
     mags: Vec<f32>,
     freqs: Vec<f32>,
+    /// Analysis phase per bin (phase-locking reference).
+    ana_phase: Vec<f32>,
     syn_mag: Vec<f32>,
     syn_freq: Vec<f32>,
+    /// Magnitude / analysis phase of the loudest bin mapped onto each
+    /// synthesis bin.
+    syn_src_mag: Vec<f32>,
+    syn_src_phase: Vec<f32>,
+    /// Spectral peak indices of the current synthesis frame (first
+    /// `n_peaks` valid); preallocated so peak picking never allocates.
+    peaks: Vec<usize>,
     /// Spectral envelope of the analysis frame (formant preservation).
     env: Vec<f32>,
     env_tmp: Vec<f32>,
@@ -75,8 +84,12 @@ impl PitchShift {
             ifft_out: vec![0.0; fft_size],
             mags: vec![0.0; half],
             freqs: vec![0.0; half],
+            ana_phase: vec![0.0; half],
             syn_mag: vec![0.0; half],
             syn_freq: vec![0.0; half],
+            syn_src_mag: vec![0.0; half],
+            syn_src_phase: vec![0.0; half],
+            peaks: vec![0; half],
             env: vec![0.0; half],
             env_tmp: vec![0.0; half],
             in_fifo: vec![0.0; fft_size],
@@ -87,8 +100,17 @@ impl PitchShift {
     }
 
     fn pitch_ratio(&self) -> f32 {
-        2.0_f32.powf((self.semitones.get() + self.cents.get() / 100.0) / 12.0)
+        let st = (self.semitones.get() + self.cents.get() / 100.0).clamp(-24.0, 24.0);
+        2.0_f32.powf(st / 12.0)
     }
+}
+
+/// Wrap a phase to [-π, π]. Accumulated synthesis phases grow by up to
+/// ~π/2·k radians per hop; left unwrapped they pass 10⁶ rad within seconds,
+/// where f32 can no longer resolve the phase and the high band turns to noise.
+#[inline]
+fn wrap_phase(x: f32) -> f32 {
+    x - (x * (0.5 / PI)).round() * (2.0 * PI)
 }
 
 /// Edge-clamped moving average over `2*w+1` bins (running sum, O(n), no
@@ -168,6 +190,7 @@ impl AudioEffect for PitchShift {
                     let im = self.fft_out[k].im;
                     self.mags[k] = (re * re + im * im).sqrt();
                     let phase = im.atan2(re);
+                    self.ana_phase[k] = phase;
                     let mut dp = phase - self.last_phase[k];
                     self.last_phase[k] = phase;
                     dp -= k as f32 * expected;
@@ -196,25 +219,66 @@ impl AudioEffect for PitchShift {
                     }
                 }
 
-                // Pitch shift via bin remap.
-                for v in &mut self.syn_mag  { *v = 0.0; }
-                for v in &mut self.syn_freq { *v = 0.0; }
+                // Pitch shift via bin remap. When several analysis bins land
+                // on one synthesis bin (downward shifts), the loudest supplies
+                // the frequency and phase reference — not whichever came last.
+                self.syn_mag.fill(0.0);
+                self.syn_freq.fill(0.0);
+                self.syn_src_mag.fill(0.0);
+                self.syn_src_phase.fill(0.0);
                 for k in 0..half {
-                    let new_bin = (k as f32 * ratio) as usize;
+                    let new_bin = (k as f32 * ratio).round() as usize;
                     if new_bin < half {
-                        self.syn_mag[new_bin]  += self.mags[k];
-                        self.syn_freq[new_bin]  = self.freqs[k] * ratio;
+                        self.syn_mag[new_bin] += self.mags[k];
+                        if self.mags[k] >= self.syn_src_mag[new_bin] {
+                            self.syn_src_mag[new_bin] = self.mags[k];
+                            self.syn_freq[new_bin] = self.freqs[k] * ratio;
+                            self.syn_src_phase[new_bin] = self.ana_phase[k];
+                        }
                     }
                 }
                 if formant {
                     for k in 0..half { self.syn_mag[k] *= self.env[k]; }
                 }
 
-                // Phase reconstruction.
+                // Phase reconstruction with identity phase locking
+                // (Laroche & Dolson 1999). Only spectral peaks integrate their
+                // instantaneous frequency; every other bin in a peak's region
+                // keeps its analysis-phase offset from that peak. This keeps
+                // the bins that make up one partial coherent, which removes
+                // most of the "phasey"/metallic colour of a plain vocoder.
+                let advance_per_hz = expected / freq_per_bin;
+                let mut n_peaks = 0;
+                for k in 1..half - 1 {
+                    let m = self.syn_mag[k];
+                    if m > 0.0 && m > self.syn_mag[k - 1] && m >= self.syn_mag[k + 1] {
+                        self.peaks[n_peaks] = k;
+                        n_peaks += 1;
+                    }
+                }
+                if n_peaks == 0 {
+                    for k in 0..half {
+                        self.sum_phase[k] =
+                            wrap_phase(self.sum_phase[k] + self.syn_freq[k] * advance_per_hz);
+                    }
+                } else {
+                    for i in 0..n_peaks {
+                        let p = self.peaks[i];
+                        let peak_phase =
+                            wrap_phase(self.sum_phase[p] + self.syn_freq[p] * advance_per_hz);
+                        self.sum_phase[p] = peak_phase;
+                        let lo = if i == 0 { 0 } else { (self.peaks[i - 1] + p) / 2 + 1 };
+                        let hi = if i + 1 == n_peaks { half - 1 } else { (p + self.peaks[i + 1]) / 2 };
+                        let ref_phase = self.syn_src_phase[p];
+                        for k in lo..=hi {
+                            if k != p {
+                                self.sum_phase[k] = wrap_phase(
+                                    peak_phase + self.syn_src_phase[k] - ref_phase);
+                            }
+                        }
+                    }
+                }
                 for k in 0..half {
-                    let dp = self.syn_freq[k] / freq_per_bin - k as f32;
-                    let advance = dp * expected + k as f32 * expected;
-                    self.sum_phase[k] += advance;
                     self.ifft_in[k] = Complex::new(
                         self.syn_mag[k] * self.sum_phase[k].cos(),
                         self.syn_mag[k] * self.sum_phase[k].sin(),

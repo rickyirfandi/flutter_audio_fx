@@ -213,8 +213,11 @@ impl AudioEffect for AutoTune {
         self.pitch_shifter.process(buffer, sample_rate);
     }
 
+    /// Signal-path delay only. The detector's analysis window affects how
+    /// quickly correction reacts, not when audio comes out, so it is not
+    /// reported as latency.
     fn latency_samples(&self) -> usize {
-        self.pitch_shifter.latency_samples() + 2048
+        self.pitch_shifter.latency_samples()
     }
 
     fn flush(&mut self) { self.reset(); }

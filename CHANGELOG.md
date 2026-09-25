@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+### Sound quality
+
+- **Pitch shift / auto-tune no longer degrade over long sessions.** Synthesis
+  phases were never wrapped and lost float precision as they grew: after
+  3 minutes an 11 kHz partial came out ~78 % noise. They now stay clean
+  indefinitely (verified at 10 minutes).
+- **Phase-locked pitch shifting** (Laroche–Dolson identity locking) and
+  loudest-bin frequency mapping. Residual smear on harmonic material drops
+  from ~0.35 % to ~0.09 % of signal energy on average.
+- **Live path: band-limited drift compensation.** Mic and speaker clocks are
+  reconciled by a 48-tap windowed-sinc resampler under a PI fill controller
+  (≤ 0.1 cent trim in steady state) instead of dropping samples and letting
+  latency float up to 50 ms. Start-up prefills instead of underrunning.
+- **Mismatched device rates and non-float formats now work**: e.g. a 16 kHz
+  Bluetooth headset mic into a 48 kHz output, or i16/i32/u16-only devices,
+  previously failed to start. Preview playback resamples when the output
+  device does not offer the file's rate.
+- **Denormal protection**: flush-to-zero is enabled for every audio callback
+  and offline render, so decaying reverb/delay tails can no longer cause CPU
+  spikes on x86.
+- **TPDF-dithered 16-bit output** for recordings and exports (digital silence
+  stays exactly zero).
+- **Equalizer** recomputes coefficients when the stream rate changes (an
+  offline render at a different rate boosted the wrong frequencies), clamps
+  bands below Nyquist, and glides parameter changes.
+- **Reverb** uses Freeverb's canonical damping scale; `damping: 1` previously
+  removed the reverb tail entirely. Note: reverbs are somewhat brighter at the
+  same `damping` value than before.
+- **Compressor** detects level in the linear domain (about 3x less gain-ripple
+  distortion on low notes at fast settings).
+- **Noise gate** gains hold, hysteresis and range (`holdMs`, `hysteresisDb`,
+  `rangeDb`), so it no longer chatters around the threshold or chops word
+  endings.
+- All effects clamp parameters to safe ranges on the audio thread; e.g. a
+  compressor `ratio` of 0 no longer produces infinite gain.
+- Auto-tune reports only signal-path latency (the detector window was
+  counted as extra delay).
+
+### Fixes
+
 - Added opt-in Dart-to-Rust integration tests for worker-isolate exports,
   queued settings, offline pitch correction, and file-error recovery. CI runs
   them against the current Rust source.

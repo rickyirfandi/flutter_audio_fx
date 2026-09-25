@@ -108,15 +108,17 @@ impl AudioEffect for Reverb {
             for c in &mut self.combs { c.retune(sr); }
             for a in &mut self.allpasses { a.retune(sr); }
         }
-        let room = self.room_size.get() * 0.28 + 0.7;
-        let damp = self.damping.get();
+        let room = self.room_size.get().clamp(0.0, 1.0) * 0.28 + 0.7;
+        // Canonical Freeverb damping scale (0.4). Unscaled, damping = 1 zeroed
+        // the comb feedback path, leaving a short slapback and no tail.
+        let damp = self.damping.get().clamp(0.0, 1.0) * 0.4;
         for c in &mut self.combs { c.feedback = room; c.set_damp(damp); }
         let mix_coeff = smooth_coeff(sr, 15.0);
-        let pd_samples = ((self.pre_delay_ms.get() * 0.001 * sr) as usize)
+        let pd_samples = ((self.pre_delay_ms.get().max(0.0) * 0.001 * sr) as usize)
             .min(self.delay_buf.len() - 1);
 
         for s in buffer.iter_mut() {
-            let mix = self.mix.tick(mix_coeff);
+            let mix = self.mix.tick(mix_coeff).clamp(0.0, 1.0);
             let dry = *s;
             let delayed = if pd_samples > 0 {
                 let rp = (self.delay_pos + self.delay_buf.len() - pd_samples) % self.delay_buf.len();

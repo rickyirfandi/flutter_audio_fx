@@ -103,7 +103,7 @@ await engine.stop();
 
 | Category | Effect | Highlights |
 |---|---|---|
-| **Cleanup** | `NoiseGate` | Threshold, attack and release gating |
+| **Cleanup** | `NoiseGate` | Threshold, attack, release, hold, hysteresis and range |
 | | `NoiseSuppress` | RNNoise (pure-Rust port) neural denoiser |
 | | `DeEsser` | Split-band sibilance control with an adjustable crossover |
 | **Pitch** | `PitchShift` | Phase vocoder, ±12 semitones, formant preservation |

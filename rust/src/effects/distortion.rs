@@ -194,11 +194,11 @@ impl AudioEffect for Distortion {
             return;
         }
         let coeff = smooth_coeff(sample_rate as f32, 15.0);
-        let tone_c = 0.01 + self.tone.get() * 0.99;
+        let tone_c = 0.01 + self.tone.get().clamp(0.0, 1.0) * 0.99;
         let dt = self.dist_type();
         for s in buffer.iter_mut() {
-            let drive = self.drive.tick(coeff);
-            let mix = self.mix.tick(coeff);
+            let drive = self.drive.tick(coeff).clamp(0.0, 1.0);
+            let mix = self.mix.tick(coeff).clamp(0.0, 1.0);
             let gain = 1.0 + drive * 20.0;
             // Only Bitcrush uses it; computed once per base sample, not per phase.
             let levels = if dt == DistortionType::Bitcrush {

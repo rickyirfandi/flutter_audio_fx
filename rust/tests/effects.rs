@@ -738,3 +738,185 @@ fn reenabled_limiter_does_not_replay_stale_audio() {
     unsafe { slot.process_in_place(&mut silence, SR) };
     assert!(silence.iter().all(|&s| s == 0.0), "re-enabled limiter replayed pre-bypass audio");
 }
+
+// ─── Sound-quality regressions ───
+
+/// Fraction of `buf`'s energy that sits in a sinusoid at `freq`.
+fn tone_purity(buf: &[f32], freq: f32) -> f32 {
+    let amp = 2.0 * magnitude_at(buf, freq, SR);
+    let r = rms(buf);
+    if r == 0.0 { return 0.0; }
+    (amp * amp / 2.0) / (r * r)
+}
+
+/// Stream `seconds` of a sine through `fx` (f64 phase, so the source itself
+/// stays exact over minutes) and return the last 4096 output samples.
+fn long_run_tail(fx: &mut dyn AudioEffect, freq: f64, seconds: usize) -> Vec<f32> {
+    let mut phase = 0.0f64;
+    let inc = 2.0 * std::f64::consts::PI * freq / SR as f64;
+    let mut buf = [0.0f32; 256];
+    let mut tail = Vec::with_capacity(4096);
+    let blocks = seconds * SR as usize / buf.len();
+    for b in 0..blocks {
+        for s in buf.iter_mut() {
+            *s = (phase.sin() * 0.5) as f32;
+            phase = (phase + inc) % (2.0 * std::f64::consts::PI);
+        }
+        fx.process(&mut buf, SR);
+        if b >= blocks - 16 { tail.extend_from_slice(&buf); }
+    }
+    tail
+}
+
+#[test]
+fn pitch_shift_stays_clean_over_long_sessions() {
+    // Regression: unwrapped synthesis phases lost f32 precision as they grew,
+    // so after 3 minutes an 11 kHz tone came out as ~78 % noise (purity 0.22).
+    // Formant preservation off: on a lone sine it would (correctly) re-apply
+    // the source envelope, which is empty at the shifted frequency.
+    let target = 11000.0 * 2f32.powf(2.0 / 12.0);
+    let mut fx = PitchShift::new(2.0);
+    assert!(fx.set_param("formant_preserve", 0.0));
+    let late = tone_purity(&long_run_tail(&mut fx, 11000.0, 180), target);
+    assert!(late > 0.99, "high band decayed into noise, purity {late} after 180 s");
+}
+
+#[test]
+fn pitch_shift_keeps_harmonic_tones_coherent() {
+    // Voice-like harmonic stack (12 partials): after shifting, nearly all
+    // energy must sit on the shifted harmonics rather than in smear.
+    for (f0, st) in [(220.0f64, 3.0f32), (180.0, -4.0), (300.0, 7.0)] {
+        let n = SR as usize * 2;
+        let mut x: Vec<f32> = (0..n).map(|i| {
+            let t = i as f64 / SR as f64;
+            (1..=12).map(|k| (2.0 * std::f64::consts::PI * f0 * k as f64 * t).sin() / k as f64)
+                .sum::<f64>() as f32 * 0.15
+        }).collect();
+        let mut fx = PitchShift::new(st);
+        assert!(fx.set_param("formant_preserve", 0.0));
+        for c in x.chunks_mut(256) { fx.process(c, SR); }
+        let tail = &x[n - 8192..];
+        let r = 2f32.powf(st / 12.0);
+        let harmonic: f32 = (1..=12).map(|k| {
+            let a = 2.0 * magnitude_at(tail, f0 as f32 * r * k as f32, SR);
+            a * a / 2.0
+        }).sum();
+        let fraction = harmonic / (rms(tail) * rms(tail));
+        assert!(fraction > 0.995, "{f0} Hz {st:+} st: harmonic fraction {fraction}");
+    }
+}
+
+#[test]
+fn equalizer_retunes_when_sample_rate_changes() {
+    // Regression: coefficients were cached across a stream-rate change, so a
+    // 44.1 kHz render after a 48 kHz session boosted the wrong frequency.
+    let mut eq = Equalizer::new_default();
+    assert!(eq.set_param("band_5_gain", 12.0)); // 1 kHz
+    let mut warm = sine(1000.0, 4800, SR);
+    eq.process(&mut warm, SR);
+    eq.reset();
+    let sr2 = 44100;
+    let mut buf = sine(1000.0, sr2 as usize / 2, sr2);
+    let input_mag = magnitude_at(&buf[buf.len() / 2..], 1000.0, sr2);
+    for chunk in buf.chunks_mut(256) { eq.process(chunk, sr2); }
+    let gain_db = 20.0 * (magnitude_at(&buf[buf.len() / 2..], 1000.0, sr2) / input_mag).log10();
+    assert!((gain_db - 12.0).abs() < 0.5, "expected +12 dB at 1 kHz, got {gain_db}");
+}
+
+#[test]
+fn equalizer_band_above_nyquist_stays_stable() {
+    let mut eq = Equalizer::new_default();
+    assert!(eq.set_param("band_9_gain", 12.0)); // 16 kHz band at a 16 kHz rate
+    let mut buf = sine(1000.0, 16000, 16000);
+    for chunk in buf.chunks_mut(128) { eq.process(chunk, 16000); }
+    assert_finite(&buf, "eq above nyquist");
+}
+
+#[test]
+fn equalizer_gain_change_has_no_discontinuity() {
+    let mut eq = Equalizer::new_default();
+    let mut buf = sine(100.0, SR as usize / 4, SR);
+    let (a, b) = buf.split_at_mut(SR as usize / 8);
+    for chunk in a.chunks_mut(128) { eq.process(chunk, SR); }
+    assert!(eq.set_param("band_2_gain", 18.0)); // 125 Hz, big jump
+    for chunk in b.chunks_mut(128) { eq.process(chunk, SR); }
+    let max_step = buf.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+    // A 100 Hz sine at +18 dB (x8, amp 4.0) moves ~0.052 per sample at most.
+    assert!(max_step < 0.06, "discontinuity {max_step}");
+}
+
+#[test]
+fn reverb_full_damping_still_rings() {
+    // Regression: unscaled damping = 1 zeroed the comb feedback, leaving only
+    // a ~50 ms slapback: no reverb tail at all.
+    let mut fx = Reverb::new(0.8, 1.0, 1.0);
+    let mut buf = vec![0.0f32; SR as usize];
+    buf[0] = 1.0;
+    for chunk in buf.chunks_mut(128) { fx.process(chunk, SR); }
+    assert!(rms(&buf[SR as usize * 3 / 10..SR as usize * 8 / 10]) > 1e-3, "reverb tail missing");
+}
+
+#[test]
+fn compressor_survives_invalid_params() {
+    let mut fx = Compressor::new(-20.0, 0.0, 0.0, -5.0); // ratio 0, attack 0, release < 0
+    let out = drive_in_chunks(&mut fx, sine(200.0, SR as usize / 4, SR), 128);
+    assert_finite(&out, "compressor invalid params");
+}
+
+#[test]
+fn compressor_gain_does_not_ripple_on_low_notes() {
+    // A steady 80 Hz tone above threshold should be turned down smoothly:
+    // gain ripple shows up as harmonic distortion. The old log-domain
+    // follower measured ~0.05 % THD here; the linear detector ~0.016 %.
+    let mut fx = Compressor::new(-30.0, 8.0, 1.0, 50.0);
+    let out = drive_in_chunks(&mut fx, sine(80.0, SR as usize, SR), 128);
+    let tail = &out[SR as usize / 2..];
+    let purity = {
+        let amp = 2.0 * magnitude_at(tail, 80.0, SR);
+        (amp * amp / 2.0) / (rms(tail) * rms(tail))
+    };
+    assert!(purity > 0.9997, "compressor THD too high, purity {purity}");
+}
+
+#[test]
+fn noise_gate_does_not_chatter_near_threshold() {
+    // A level wobbling ±2 dB around the threshold must keep the gate open
+    // (hysteresis) instead of toggling it on every wobble.
+    let mut fx = NoiseGate::new(-30.0, 1.0, 20.0);
+    let base = 10f32.powf(-30.0 / 20.0);
+    let n = SR as usize;
+    let input: Vec<f32> = (0..n).map(|i| {
+        let wobble = 10f32.powf(2.0 * (2.0 * std::f32::consts::PI * 3.0 * i as f32 / SR as f32).sin() / 20.0);
+        base * wobble * (2.0 * std::f32::consts::PI * 300.0 * i as f32 / SR as f32).sin()
+    }).collect();
+    let out = drive_in_chunks(&mut fx, input.clone(), 128);
+    let ratio = rms(&out[n / 2..]) / rms(&input[n / 2..]);
+    assert!(ratio > 0.9, "gate chattered/closed on a signal at threshold: {ratio}");
+}
+
+#[test]
+fn noise_gate_hold_keeps_short_gaps_open() {
+    let mut fx = NoiseGate::new(-30.0, 1.0, 5.0);
+    assert!(fx.set_param("hold_ms", 100.0));
+    let mut buf = sine(300.0, SR as usize / 2, SR);
+    // 30 ms gap of near-silence mid-signal.
+    let gap = SR as usize / 4..SR as usize / 4 + SR as usize * 3 / 100;
+    for s in &mut buf[gap.clone()] { *s *= 0.001; }
+    let out = drive_in_chunks(&mut fx, buf, 128);
+    // Right after the gap the gate must already be open (no re-attack dip).
+    let after = &out[gap.end + 48..gap.end + 480];
+    let expected = rms(&sine(300.0, 432, SR));
+    assert!(rms(after) > expected * 0.8, "gate closed inside the hold window");
+}
+
+#[test]
+fn tpdf_dither_is_bounded_and_decorrelates_silence() {
+    use flutter_audio_fx_core::util::Dither16;
+    let mut d = Dither16::new(1);
+    // A 1/3-LSB signal is kept alive as noise instead of truncating to 0.
+    let vals: Vec<i16> = (0..10000).map(|_| d.quantize(1e-5)).collect();
+    assert!(vals.iter().all(|v| v.abs() <= 1), "dither exceeded ±1 LSB");
+    assert!(vals.iter().any(|&v| v != 0), "dither produced no noise");
+    // Digital silence stays digital silence (auto-blank).
+    assert!((0..1000).all(|_| d.quantize(0.0) == 0));
+}

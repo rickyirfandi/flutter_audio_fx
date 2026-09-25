@@ -10,7 +10,8 @@ pub struct Compressor {
     pub makeup_gain_db: SmoothedParam,
     pub knee_db: AtomicF32,
     pub sidechain_hpf_hz: AtomicF32,
-    envelope_db: f32,
+    /// Linear-domain peak envelope of the detector signal.
+    envelope: f32,
     sidechain_low_state: f32,
 }
 
@@ -25,7 +26,7 @@ impl Compressor {
             makeup_gain_db: SmoothedParam::new(0.0),
             knee_db: AtomicF32::new(3.0),
             sidechain_hpf_hz: AtomicF32::new(0.0),
-            envelope_db: -96.0,
+            envelope: 0.0,
             sidechain_low_state: 0.0,
         }
     }
@@ -56,11 +57,12 @@ impl AudioEffect for Compressor {
             return;
         }
         let sr = sample_rate as f32;
-        let att = (-1.0 / (self.attack_ms.get() * 0.001 * sr)).exp();
-        let rel = (-1.0 / (self.release_ms.get() * 0.001 * sr)).exp();
-        let threshold = self.threshold_db.get();
-        let ratio = self.ratio.get();
-        let knee = self.knee_db.get();
+        let att = (-1.0 / (self.attack_ms.get().clamp(0.05, 500.0) * 0.001 * sr).max(1.0)).exp();
+        let rel = (-1.0 / (self.release_ms.get().clamp(1.0, 5000.0) * 0.001 * sr).max(1.0)).exp();
+        let threshold = self.threshold_db.get().clamp(-80.0, 0.0);
+        // ratio < 1 would expand and ratio = 0 divides by zero.
+        let ratio = self.ratio.get().clamp(1.0, 100.0);
+        let knee = self.knee_db.get().clamp(0.0, 24.0);
         let sidechain_hpf_hz = self.sidechain_hpf_hz.get().clamp(0.0, 500.0);
         let sidechain_coeff = 1.0 - (-2.0 * std::f32::consts::PI * sidechain_hpf_hz / sr).exp();
         let makeup_coeff = smooth_coeff(sr, 15.0);
@@ -74,36 +76,41 @@ impl AudioEffect for Compressor {
                 self.sidechain_low_state = 0.0;
                 *s
             };
-            let db = Self::to_db(detector);
-            let c = if db > self.envelope_db { att } else { rel };
-            self.envelope_db = c * self.envelope_db + (1.0 - c) * db;
+            // Branching peak detector in the linear domain, then to dB. A
+            // log-domain follower fed per-sample |x| dives toward -96 dB at
+            // every zero crossing, which ripples the gain at twice the input
+            // frequency and distorts low voices.
+            let level = detector.abs();
+            let c = if level > self.envelope { att } else { rel };
+            self.envelope = c * self.envelope + (1.0 - c) * level;
+            let envelope_db = Self::to_db(self.envelope);
 
             // Gain computation with soft knee
             let gain = if knee <= 0.01 {
-                if self.envelope_db <= threshold {
+                if envelope_db <= threshold {
                     0.0
                 } else {
-                    let over = self.envelope_db - threshold;
+                    let over = envelope_db - threshold;
                     (over / ratio) - over
                 }
             } else {
                 let hk = knee / 2.0;
-                if self.envelope_db < threshold - hk {
+                if envelope_db < threshold - hk {
                     0.0
-                } else if self.envelope_db > threshold + hk {
-                    let over = self.envelope_db - threshold;
+                } else if envelope_db > threshold + hk {
+                    let over = envelope_db - threshold;
                     (over / ratio) - over
                 } else {
-                    let x = self.envelope_db - threshold + hk;
+                    let x = envelope_db - threshold + hk;
                     (1.0 / ratio - 1.0) * x * x / (2.0 * knee)
                 }
             };
-            *s *= Self::from_db(gain + makeup);
+            *s *= Self::from_db(gain + makeup.clamp(-24.0, 36.0));
         }
     }
 
     fn reset(&mut self) {
-        self.envelope_db = -96.0;
+        self.envelope = 0.0;
         self.sidechain_low_state = 0.0;
         self.makeup_gain_db.snap();
     }

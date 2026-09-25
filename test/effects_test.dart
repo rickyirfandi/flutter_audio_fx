@@ -13,6 +13,11 @@ void main() {
       expect(json['params']['threshold_db'], -35);
       expect(json['params']['attack_ms'], 2);
       expect(json['params']['release_ms'], 60);
+      expect(json['params']['hold_ms'], 50);
+      expect(json['params']['hysteresis_db'], 6);
+      expect(json['params']['range_db'], -100);
+      gate.updateParam('hold_ms', 120);
+      expect(gate.holdMs, 120);
     });
 
     test('PitchShift updateParam mutates state', () {

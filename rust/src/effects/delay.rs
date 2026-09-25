@@ -50,7 +50,7 @@ impl AudioEffect for Delay {
         for s in buffer.iter_mut() {
             self.cur_delay += (target - self.cur_delay).clamp(-MAX_GLIDE, MAX_GLIDE);
             let fb = self.feedback.tick(gain_coeff).clamp(0.0, 0.95);
-            let mix = self.mix.tick(gain_coeff);
+            let mix = self.mix.tick(gain_coeff).clamp(0.0, 1.0);
             let dry = *s;
             // Fractional read at write_pos - cur_delay (linear interpolation).
             // Split into integer + fraction so precision doesn't depend on the
