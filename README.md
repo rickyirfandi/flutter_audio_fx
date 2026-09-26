@@ -211,7 +211,7 @@ effects' total plus the audio buffer latency:
 | Effect | Latency @ 48 kHz |
 |---|---|
 | Pitch Shift | 1536 samples (32 ms) |
-| Auto-Tune | 3584 samples (~75 ms) |
+| Auto-Tune | 1536 samples (32 ms) |
 | Noise Suppression | 480 samples (10 ms) |
 | Limiter | 240 samples (5 ms) |
 | Distortion | 16 samples (0.3 ms) |
@@ -271,8 +271,11 @@ for Apple platforms.
 
 Issues and pull requests are welcome at
 [github.com/rickyirfandi/flutter_audio_fx](https://github.com/rickyirfandi/flutter_audio_fx/issues).
-To add a new effect, see the checklist in [`CLAUDE.md`](CLAUDE.md#adding-a-new-effect).
-Please keep all audio-thread code allocation-free and lock-free.
+
+Adding an effect means implementing the `AudioEffect` trait under
+`rust/src/effects/`, registering it in `EffectType` and the chain builder, then
+mirroring it with an `AudioEffect` subclass in `lib/src/effects/`. Please keep
+all audio-thread code allocation-free and lock-free.
 
 ## 📄 License
 
