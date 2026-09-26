@@ -1,4 +1,4 @@
-name: voxforge
+name: flutter_audio_fx_example
 description: Audio recording app with real-time DSP effects powered by Rust.
 publish_to: 'none'
 

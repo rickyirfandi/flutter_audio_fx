@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_audio_fx/flutter_audio_fx.dart';
-import '../theme/voxforge_theme.dart';
+import '../theme/app_theme.dart';
 
 /// A single effect card in the editor chain list.
 /// Shows effect name + icon, toggle switch, and expandable params.
@@ -53,12 +53,11 @@ class _EffectCardState extends State<EffectCard> {
     return AnimatedContainer(
       duration: const Duration(milliseconds: 200),
       decoration: BoxDecoration(
-        color: isOn ? VoxForgeTheme.bgCard : VoxForgeTheme.bgCard.withValues(alpha: 0.5),
+        color: isOn ? AppTheme.bgCard : AppTheme.bgCard.withValues(alpha: 0.5),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
-          color: isOn
-              ? VoxForgeTheme.primary.withValues(alpha: 0.2)
-              : VoxForgeTheme.border,
+          color:
+              isOn ? AppTheme.primary.withValues(alpha: 0.2) : AppTheme.border,
           width: 0.5,
         ),
       ),
@@ -73,7 +72,7 @@ class _EffectCardState extends State<EffectCard> {
                 children: [
                   // Drag handle
                   const Icon(Icons.drag_indicator,
-                      size: 16, color: VoxForgeTheme.textMuted),
+                      size: 16, color: AppTheme.textMuted),
                   const SizedBox(width: 10),
                   // Index
                   Container(
@@ -81,7 +80,7 @@ class _EffectCardState extends State<EffectCard> {
                     height: 22,
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
-                      color: VoxForgeTheme.bgSurface,
+                      color: AppTheme.bgSurface,
                       borderRadius: BorderRadius.circular(6),
                     ),
                     child: Text(
@@ -89,7 +88,7 @@ class _EffectCardState extends State<EffectCard> {
                       style: const TextStyle(
                         fontSize: 10,
                         fontWeight: FontWeight.w700,
-                        color: VoxForgeTheme.textMuted,
+                        color: AppTheme.textMuted,
                       ),
                     ),
                   ),
@@ -97,7 +96,7 @@ class _EffectCardState extends State<EffectCard> {
                   // Icon + name
                   Icon(_icon,
                       size: 16,
-                      color: isOn ? VoxForgeTheme.primary : VoxForgeTheme.textMuted),
+                      color: isOn ? AppTheme.primary : AppTheme.textMuted),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -105,7 +104,7 @@ class _EffectCardState extends State<EffectCard> {
                       style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
-                        color: isOn ? VoxForgeTheme.textPrimary : VoxForgeTheme.textMuted,
+                        color: isOn ? AppTheme.textPrimary : AppTheme.textMuted,
                       ),
                     ),
                   ),
@@ -119,9 +118,11 @@ class _EffectCardState extends State<EffectCard> {
                   ),
                   // Expand arrow
                   Icon(
-                    _expanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                    _expanded
+                        ? Icons.keyboard_arrow_up
+                        : Icons.keyboard_arrow_down,
                     size: 18,
-                    color: VoxForgeTheme.textMuted,
+                    color: AppTheme.textMuted,
                   ),
                 ],
               ),
@@ -130,7 +131,7 @@ class _EffectCardState extends State<EffectCard> {
 
           // Expanded params
           if (_expanded) ...[
-            const Divider(height: 1, color: VoxForgeTheme.border),
+            const Divider(height: 1, color: AppTheme.border),
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
               child: Column(
@@ -143,10 +144,12 @@ class _EffectCardState extends State<EffectCard> {
                     child: TextButton.icon(
                       onPressed: () => widget.onRemove(widget.index),
                       icon: const Icon(Icons.delete_outline, size: 14),
-                      label: const Text('Remove', style: TextStyle(fontSize: 11)),
+                      label:
+                          const Text('Remove', style: TextStyle(fontSize: 11)),
                       style: TextButton.styleFrom(
-                        foregroundColor: VoxForgeTheme.danger,
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                        foregroundColor: AppTheme.danger,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 4),
                       ),
                     ),
                   ),
@@ -259,7 +262,7 @@ class _ParamSlider extends StatelessWidget {
               label,
               style: const TextStyle(
                 fontSize: 11,
-                color: VoxForgeTheme.textSecondary,
+                color: AppTheme.textSecondary,
               ),
             ),
           ),
@@ -281,7 +284,7 @@ class _ParamSlider extends StatelessWidget {
               style: const TextStyle(
                 fontSize: 10,
                 fontFamily: 'monospace',
-                color: VoxForgeTheme.textSecondary,
+                color: AppTheme.textSecondary,
               ),
               textAlign: TextAlign.right,
             ),

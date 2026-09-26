@@ -225,9 +225,11 @@ class AudioFxEngine {
     try {
       // The native runtime is a process-wide singleton, so the worker isolate
       // operates on the same engine the main isolate initialized.
-      final rc = await Isolate.run(() => _processFileNative(inputPath, outputPath));
+      final rc =
+          await Isolate.run(() => _processFileNative(inputPath, outputPath));
       if (rc != 0) {
-        throw StateError('processFile failed (code $rc): ${_lastNativeError()}');
+        throw StateError(
+            'processFile failed (code $rc): ${_lastNativeError()}');
       }
       onProgress?.call(1.0);
       return outputPath;
@@ -244,7 +246,8 @@ class AudioFxEngine {
     try {
       final rc = native.fxEnginePreviewFile(ptr);
       if (rc != 0) {
-        throw StateError('previewFile failed (code $rc): ${_lastNativeError()}');
+        throw StateError(
+            'previewFile failed (code $rc): ${_lastNativeError()}');
       }
     } finally {
       calloc.free(ptr);
@@ -269,7 +272,8 @@ class AudioFxEngine {
 
   void _startVizPolling() {
     _stopVizPolling();
-    _vizTimer = Timer.periodic(const Duration(milliseconds: 16), (_) => _pollViz());
+    _vizTimer =
+        Timer.periodic(const Duration(milliseconds: 16), (_) => _pollViz());
   }
 
   void _stopVizPolling() {

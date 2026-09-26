@@ -2,7 +2,18 @@ import 'effect.dart';
 
 // ignore_for_file: constant_identifier_names
 enum MusicalKey {
-  C, Db, D, Eb, E, F, Gb, G, Ab, A, Bb, B;
+  C,
+  Db,
+  D,
+  Eb,
+  E,
+  F,
+  Gb,
+  G,
+  Ab,
+  A,
+  Bb,
+  B;
 
   String get label => switch (this) {
         C => 'C',

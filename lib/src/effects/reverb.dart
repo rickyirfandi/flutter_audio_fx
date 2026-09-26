@@ -1,9 +1,18 @@
 import 'effect.dart';
 
+/// Freeverb-style reverb (Schroeder-Moorer), tuned for voice.
 class Reverb extends AudioEffect {
+  /// Size of the simulated space, 0.0 (tight) – 1.0 (large hall).
   double roomSize;
+
+  /// How quickly high frequencies decay, 0.0 (bright) – 1.0 (dark).
   double damping;
+
+  /// Wet/dry blend, 0.0 (dry) – 1.0 (fully wet).
   double mix;
+
+  /// Gap before the reverb starts, in milliseconds. A short pre-delay
+  /// keeps the dry voice clear in front of the tail.
   double preDelayMs;
 
   Reverb({

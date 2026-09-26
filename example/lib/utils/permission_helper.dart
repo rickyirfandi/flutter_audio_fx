@@ -15,10 +15,15 @@ class PermissionHelper {
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('Microphone Access'),
-          content: const Text('VoxForge needs mic access. Enable in settings.'),
+          content:
+              const Text('This demo needs mic access. Enable in settings.'),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-            TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Settings')),
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel')),
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Settings')),
           ],
         ),
       );

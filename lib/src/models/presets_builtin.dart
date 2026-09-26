@@ -36,10 +36,10 @@ abstract final class BuiltInPresets {
         NoiseGate(thresholdDb: -40),
         NoiseSuppress(strength: 0.8),
         Equalizer(bands: [
-          EqBand(freq: 80, gainDb: -6),   // cut rumble
-          EqBand(freq: 200, gainDb: 2),   // warmth
-          EqBand(freq: 3000, gainDb: 4),  // presence
-          EqBand(freq: 5000, gainDb: 3),  // clarity
+          EqBand(freq: 80, gainDb: -6), // cut rumble
+          EqBand(freq: 200, gainDb: 2), // warmth
+          EqBand(freq: 3000, gainDb: 4), // presence
+          EqBand(freq: 5000, gainDb: 3), // clarity
           EqBand(freq: 10000, gainDb: -2), // de-ess
         ]),
         Compressor(thresholdDb: -20, ratio: 4.0, attackMs: 10, releaseMs: 100),
@@ -57,10 +57,10 @@ abstract final class BuiltInPresets {
         NoiseSuppress(strength: 0.5),
         PitchShift(semitones: -7, formantPreserve: true),
         Equalizer(bands: [
-          EqBand(freq: 80, gainDb: 5),    // bass boost
-          EqBand(freq: 200, gainDb: 3),   // body
-          EqBand(freq: 800, gainDb: -1),  // reduce mud
-          EqBand(freq: 3000, gainDb: 1),  // presence
+          EqBand(freq: 80, gainDb: 5), // bass boost
+          EqBand(freq: 200, gainDb: 3), // body
+          EqBand(freq: 800, gainDb: -1), // reduce mud
+          EqBand(freq: 3000, gainDb: 1), // presence
           EqBand(freq: 8000, gainDb: -3), // tame highs
         ]),
         Compressor(thresholdDb: -15, ratio: 3.0, attackMs: 10, releaseMs: 150),
@@ -107,11 +107,11 @@ abstract final class BuiltInPresets {
   /// Telephone / walkie-talkie effect
   static List<AudioEffect> get telephone => [
         Equalizer(bands: [
-          EqBand(freq: 100, gainDb: -12),  // cut lows
-          EqBand(freq: 200, gainDb: -6),   // roll off
-          EqBand(freq: 800, gainDb: 2),    // midrange
-          EqBand(freq: 2000, gainDb: 3),   // telephone presence
-          EqBand(freq: 4000, gainDb: -6),  // roll off highs
+          EqBand(freq: 100, gainDb: -12), // cut lows
+          EqBand(freq: 200, gainDb: -6), // roll off
+          EqBand(freq: 800, gainDb: 2), // midrange
+          EqBand(freq: 2000, gainDb: 3), // telephone presence
+          EqBand(freq: 4000, gainDb: -6), // roll off highs
           EqBand(freq: 8000, gainDb: -12), // cut highs
         ]),
         Distortion(drive: 0.1, tone: 0.5, mix: 0.4),
@@ -157,84 +157,90 @@ abstract final class BuiltInPresets {
       ];
 
   /// All available built-in presets
-  static List<({String id, String name, String emoji, String desc, List<AudioEffect> Function() chain})>
-      get all => [
-            (
-              id: 'tpain',
-              name: 'T-Pain',
-              emoji: '🎤',
-              desc: 'Hard auto-tune + compression',
-              chain: () => tpain
-            ),
-            (
-              id: 'radio',
-              name: 'Radio Host',
-              emoji: '📻',
-              desc: 'Clean broadcast voice',
-              chain: () => radioHost
-            ),
-            (
-              id: 'chipmunk',
-              name: 'Chipmunk',
-              emoji: '🐿️',
-              desc: '+1 octave pitch shift',
-              chain: () => chipmunk
-            ),
-            (
-              id: 'deep',
-              name: 'Deep Voice',
-              emoji: '🗿',
-              desc: 'Deep bass voice',
-              chain: () => deepVoice
-            ),
-            (
-              id: 'lofi',
-              name: 'Lo-Fi',
-              emoji: '📼',
-              desc: 'Bitcrush + reverb aesthetic',
-              chain: () => lofi
-            ),
-            (
-              id: 'karaoke',
-              name: 'Karaoke',
-              emoji: '🎶',
-              desc: 'Reverb + delay for singing',
-              chain: () => karaoke
-            ),
-            (
-              id: 'podcast',
-              name: 'Podcast',
-              emoji: '🎙️',
-              desc: 'Professional voice cleanup',
-              chain: () => podcast
-            ),
-            (
-              id: 'telephone',
-              name: 'Telephone',
-              emoji: '📞',
-              desc: 'Vintage phone filter',
-              chain: () => telephone
-            ),
-            (
-              id: 'robot',
-              name: 'Robot',
-              emoji: '🤖',
-              desc: 'Robotic vocoder effect',
-              chain: () => robot
-            ),
-            (
-              id: 'echo',
-              name: 'Echo Chamber',
-              emoji: '🏔️',
-              desc: 'Heavy echo + reverb',
-              chain: () => echoChamber
-            ),
-            (
-              id: 'gentle_autotune',
-              name: 'Gentle Tune',
-              emoji: '🎵',
-              desc: 'Subtle pitch correction',
-              chain: () => gentleAutoTune
-            ),
-          ];
+  static List<
+      ({
+        String id,
+        String name,
+        String emoji,
+        String desc,
+        List<AudioEffect> Function() chain
+      })> get all => [
+        (
+          id: 'tpain',
+          name: 'T-Pain',
+          emoji: '🎤',
+          desc: 'Hard auto-tune + compression',
+          chain: () => tpain
+        ),
+        (
+          id: 'radio',
+          name: 'Radio Host',
+          emoji: '📻',
+          desc: 'Clean broadcast voice',
+          chain: () => radioHost
+        ),
+        (
+          id: 'chipmunk',
+          name: 'Chipmunk',
+          emoji: '🐿️',
+          desc: '+1 octave pitch shift',
+          chain: () => chipmunk
+        ),
+        (
+          id: 'deep',
+          name: 'Deep Voice',
+          emoji: '🗿',
+          desc: 'Deep bass voice',
+          chain: () => deepVoice
+        ),
+        (
+          id: 'lofi',
+          name: 'Lo-Fi',
+          emoji: '📼',
+          desc: 'Bitcrush + reverb aesthetic',
+          chain: () => lofi
+        ),
+        (
+          id: 'karaoke',
+          name: 'Karaoke',
+          emoji: '🎶',
+          desc: 'Reverb + delay for singing',
+          chain: () => karaoke
+        ),
+        (
+          id: 'podcast',
+          name: 'Podcast',
+          emoji: '🎙️',
+          desc: 'Professional voice cleanup',
+          chain: () => podcast
+        ),
+        (
+          id: 'telephone',
+          name: 'Telephone',
+          emoji: '📞',
+          desc: 'Vintage phone filter',
+          chain: () => telephone
+        ),
+        (
+          id: 'robot',
+          name: 'Robot',
+          emoji: '🤖',
+          desc: 'Robotic vocoder effect',
+          chain: () => robot
+        ),
+        (
+          id: 'echo',
+          name: 'Echo Chamber',
+          emoji: '🏔️',
+          desc: 'Heavy echo + reverb',
+          chain: () => echoChamber
+        ),
+        (
+          id: 'gentle_autotune',
+          name: 'Gentle Tune',
+          emoji: '🎵',
+          desc: 'Subtle pitch correction',
+          chain: () => gentleAutoTune
+        ),
+      ];
 }

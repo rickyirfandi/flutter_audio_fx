@@ -1,7 +1,7 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_audio_fx/flutter_audio_fx.dart';
-import '../theme/voxforge_theme.dart';
+import '../theme/app_theme.dart';
 
 /// Combined visualizer panel showing animated waveform/spectrum.
 /// Uses a fake animation when no real audio data is available.
@@ -44,9 +44,9 @@ class _VisualizerPanelState extends State<VisualizerPanel>
     return Container(
       height: 180,
       decoration: BoxDecoration(
-        color: VoxForgeTheme.bgCard,
+        color: AppTheme.bgCard,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: VoxForgeTheme.border, width: 0.5),
+        border: Border.all(color: AppTheme.border, width: 0.5),
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
@@ -76,7 +76,7 @@ class _VisualizerPanelState extends State<VisualizerPanel>
               right: 0,
               child: Container(
                 height: 0.5,
-                color: VoxForgeTheme.primary.withValues(alpha: 0.15),
+                color: AppTheme.primary.withValues(alpha: 0.15),
               ),
             ),
             // Label
@@ -91,8 +91,8 @@ class _VisualizerPanelState extends State<VisualizerPanel>
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: widget.isActive
-                          ? VoxForgeTheme.danger
-                          : VoxForgeTheme.textMuted,
+                          ? AppTheme.danger
+                          : AppTheme.textMuted,
                     ),
                   ),
                   const SizedBox(width: 6),
@@ -103,8 +103,8 @@ class _VisualizerPanelState extends State<VisualizerPanel>
                       fontWeight: FontWeight.w700,
                       letterSpacing: 2,
                       color: widget.isActive
-                          ? VoxForgeTheme.danger
-                          : VoxForgeTheme.textMuted,
+                          ? AppTheme.danger
+                          : AppTheme.textMuted,
                     ),
                   ),
                 ],
@@ -118,7 +118,7 @@ class _VisualizerPanelState extends State<VisualizerPanel>
                 '50Hz',
                 style: TextStyle(
                   fontSize: 8,
-                  color: VoxForgeTheme.textMuted.withValues(alpha: 0.5),
+                  color: AppTheme.textMuted.withValues(alpha: 0.5),
                 ),
               ),
             ),
@@ -129,7 +129,7 @@ class _VisualizerPanelState extends State<VisualizerPanel>
                 '16kHz',
                 style: TextStyle(
                   fontSize: 8,
-                  color: VoxForgeTheme.textMuted.withValues(alpha: 0.5),
+                  color: AppTheme.textMuted.withValues(alpha: 0.5),
                 ),
               ),
             ),
@@ -144,7 +144,7 @@ class _GridPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = VoxForgeTheme.border.withValues(alpha: 0.3)
+      ..color = AppTheme.border.withValues(alpha: 0.3)
       ..strokeWidth = 0.5;
 
     // Horizontal lines

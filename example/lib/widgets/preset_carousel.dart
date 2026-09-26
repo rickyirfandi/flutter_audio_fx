@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_audio_fx/flutter_audio_fx.dart';
-import '../theme/voxforge_theme.dart';
+import '../theme/app_theme.dart';
 
 class PresetCarousel extends StatelessWidget {
   final String activePresetId;
@@ -34,13 +34,11 @@ class PresetCarousel extends StatelessWidget {
               width: 78,
               decoration: BoxDecoration(
                 color: isActive
-                    ? VoxForgeTheme.primary.withValues(alpha: 0.1)
-                    : VoxForgeTheme.bgCard,
+                    ? AppTheme.primary.withValues(alpha: 0.1)
+                    : AppTheme.bgCard,
                 borderRadius: BorderRadius.circular(14),
                 border: Border.all(
-                  color: isActive
-                      ? VoxForgeTheme.primary
-                      : VoxForgeTheme.border,
+                  color: isActive ? AppTheme.primary : AppTheme.border,
                   width: isActive ? 1.5 : 0.5,
                 ),
               ),
@@ -55,9 +53,8 @@ class PresetCarousel extends StatelessWidget {
                       fontSize: 10,
                       fontWeight: FontWeight.w600,
                       letterSpacing: 0.5,
-                      color: isActive
-                          ? VoxForgeTheme.primary
-                          : VoxForgeTheme.textSecondary,
+                      color:
+                          isActive ? AppTheme.primary : AppTheme.textSecondary,
                     ),
                     textAlign: TextAlign.center,
                     maxLines: 1,

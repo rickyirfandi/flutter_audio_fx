@@ -1,9 +1,9 @@
 <p align="center">
-  <img src="doc/images/banner.png" alt="flutter_audio_fx — real-time audio effects for Flutter" width="100%">
+  <img src="https://raw.githubusercontent.com/rickyirfandi/flutter_audio_fx/master/doc/images/banner.png" alt="flutter_audio_fx — real-time audio effects for Flutter" width="100%">
 </p>
 
 <h1 align="center">
-  <img src="doc/images/icon.png" alt="" width="40" height="40" align="top">
+  <img src="https://raw.githubusercontent.com/rickyirfandi/flutter_audio_fx/master/doc/images/icon.png" alt="" width="40" height="40" align="top">
   flutter_audio_fx
 </h1>
 

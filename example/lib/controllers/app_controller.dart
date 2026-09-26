@@ -43,13 +43,16 @@ class AppController extends ChangeNotifier {
 
   void _setError(String msg) {
     _lastError = msg;
-    debugPrint('[VoxForge] $msg');
+    debugPrint('[AudioFxExample] $msg');
     notifyListeners();
   }
 
   /// Most recent engine/recording error, cleared on the next successful action.
   String? get lastError => _lastError;
-  void clearError() { _lastError = null; notifyListeners(); }
+  void clearError() {
+    _lastError = null;
+    notifyListeners();
+  }
 
   // ─── Getters ───
   RecordingMode get mode => _mode;
@@ -66,7 +69,9 @@ class AppController extends ChangeNotifier {
   String get elapsedFormatted {
     final m = _elapsed.inMinutes.remainder(60).toString().padLeft(2, '0');
     final s = _elapsed.inSeconds.remainder(60).toString().padLeft(2, '0');
-    final ms = (_elapsed.inMilliseconds.remainder(1000) ~/ 10).toString().padLeft(2, '0');
+    final ms = (_elapsed.inMilliseconds.remainder(1000) ~/ 10)
+        .toString()
+        .padLeft(2, '0');
     return '$m:$s.$ms';
   }
 
@@ -93,7 +98,8 @@ class AppController extends ChangeNotifier {
 
     final project = RecordingProject(
       id: id,
-      title: 'Recording ${DateTime.now().hour}:${DateTime.now().minute.toString().padLeft(2, '0')}',
+      title:
+          'Recording ${DateTime.now().hour}:${DateTime.now().minute.toString().padLeft(2, '0')}',
       createdAt: DateTime.now(),
       duration: Duration.zero,
       mode: _mode,
@@ -130,7 +136,9 @@ class AppController extends ChangeNotifier {
     _timer = null;
     _isRecording = false;
 
-    try { await engine.stop(); } catch (e) {
+    try {
+      await engine.stop();
+    } catch (e) {
       _currentProject = null;
       _setError('Could not save recording: $e');
       return;
@@ -172,7 +180,9 @@ class AppController extends ChangeNotifier {
 
   Future<void> stopPlayback() async {
     _isPlaying = false;
-    try { await engine.stop(); } catch (_) {}
+    try {
+      await engine.stop();
+    } catch (_) {}
     notifyListeners();
   }
 
@@ -181,8 +191,8 @@ class AppController extends ChangeNotifier {
 
   void _applyPreset(String presetId) {
     _activePresetId = presetId;
-    final preset = BuiltInPresets.all.firstWhere(
-      (p) => p.id == presetId, orElse: () => BuiltInPresets.all.first);
+    final preset = BuiltInPresets.all.firstWhere((p) => p.id == presetId,
+        orElse: () => BuiltInPresets.all.first);
     _chain = preset.chain();
     engine.setChain(List.from(_chain));
     notifyListeners();
@@ -230,7 +240,9 @@ class AppController extends ChangeNotifier {
   }
 
   void reorderEffect(int from, int to) {
-    if (from < 0 || from >= _chain.length || to < 0 || to >= _chain.length) return;
+    if (from < 0 || from >= _chain.length || to < 0 || to >= _chain.length) {
+      return;
+    }
     final e = _chain.removeAt(from);
     _chain.insert(to, e);
     _activePresetId = 'custom';
@@ -240,16 +252,22 @@ class AppController extends ChangeNotifier {
 
   void addEffect(AudioEffect effect) {
     final limIdx = _chain.indexWhere((e) => e.type == 'limiter');
-    if (limIdx >= 0) { _chain.insert(limIdx, effect); }
-    else { _chain.add(effect); }
+    if (limIdx >= 0) {
+      _chain.insert(limIdx, effect);
+    } else {
+      _chain.add(effect);
+    }
     _activePresetId = 'custom';
     engine.setChain(List.from(_chain));
     notifyListeners();
   }
 
   // ─── Export ───
-  Future<String?> exportProject(RecordingProject project, AudioFormat format) async {
-    _isExporting = true; _exportProgress = 0.0; notifyListeners();
+  Future<String?> exportProject(
+      RecordingProject project, AudioFormat format) async {
+    _isExporting = true;
+    _exportProgress = 0.0;
+    notifyListeners();
     try {
       final dir = await getApplicationDocumentsDirectory();
       final ext = format is Mp3Format ? 'mp3' : 'wav';
@@ -257,17 +275,26 @@ class AppController extends ChangeNotifier {
       await Directory('${dir.path}/exports').create(recursive: true);
 
       engine.setChain(project.effectChain.isNotEmpty
-          ? List.from(project.effectChain) : List.from(_chain));
+          ? List.from(project.effectChain)
+          : List.from(_chain));
 
       final result = await engine.processFile(
-        inputPath: project.rawPath, outputPath: outPath, format: format,
-        onProgress: (p) { _exportProgress = p; notifyListeners(); },
+        inputPath: project.rawPath,
+        outputPath: outPath,
+        format: format,
+        onProgress: (p) {
+          _exportProgress = p;
+          notifyListeners();
+        },
       );
-      _exportProgress = 1.0; _isExporting = false; notifyListeners();
+      _exportProgress = 1.0;
+      _isExporting = false;
+      notifyListeners();
       return result;
     } catch (e) {
       _setError('Export failed: $e');
-      _isExporting = false; notifyListeners();
+      _isExporting = false;
+      notifyListeners();
       return null;
     }
   }

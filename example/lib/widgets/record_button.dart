@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../theme/voxforge_theme.dart';
+import '../theme/app_theme.dart';
 
 class RecordButton extends StatelessWidget {
   final bool isRecording;
@@ -33,7 +33,7 @@ class RecordButton extends StatelessWidget {
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     border: Border.all(
-                      color: VoxForgeTheme.danger
+                      color: AppTheme.danger
                           .withValues(alpha: 0.3 - pulseAnimation.value * 0.25),
                       width: 2,
                     ),
@@ -48,8 +48,8 @@ class RecordButton extends StatelessWidget {
                 shape: BoxShape.circle,
                 border: Border.all(
                   color: isRecording
-                      ? VoxForgeTheme.danger.withValues(alpha: 0.4)
-                      : VoxForgeTheme.border,
+                      ? AppTheme.danger.withValues(alpha: 0.4)
+                      : AppTheme.border,
                   width: 3,
                 ),
               ),
@@ -60,12 +60,12 @@ class RecordButton extends StatelessWidget {
               width: isRecording ? 36 : 68,
               height: isRecording ? 36 : 68,
               decoration: BoxDecoration(
-                gradient: VoxForgeTheme.recordGradient,
-                borderRadius:
-                    BorderRadius.circular(isRecording ? 8 : 34),
+                gradient: AppTheme.recordGradient,
+                borderRadius: BorderRadius.circular(isRecording ? 8 : 34),
                 boxShadow: [
                   BoxShadow(
-                    color: VoxForgeTheme.danger.withValues(alpha: isRecording ? 0.5 : 0.2),
+                    color: AppTheme.danger
+                        .withValues(alpha: isRecording ? 0.5 : 0.2),
                     blurRadius: isRecording ? 24 : 8,
                   ),
                 ],

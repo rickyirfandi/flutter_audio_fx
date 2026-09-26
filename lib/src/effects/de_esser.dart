@@ -1,9 +1,21 @@
 import 'effect.dart';
 
+/// Split-band de-esser that tames harsh "s" sounds.
+///
+/// Only the band above [frequencyHz] is attenuated, so the body of the
+/// voice is left alone.
 class DeEsser extends AudioEffect {
+  /// Crossover above which sibilance is detected, in Hz, 2000.0–12000.0
+  /// (also capped below Nyquist at low sample rates).
   double frequencyHz;
+
+  /// Level at which attenuation begins, in dBFS, -96.0–0.0.
   double thresholdDb;
+
+  /// Strength of the attenuation, 0.0 (off) – 1.0 (up to 20 dB).
   double amount;
+
+  /// Recovery time after a sibilant, in ms, 1.0–1000.0.
   double releaseMs;
 
   DeEsser({

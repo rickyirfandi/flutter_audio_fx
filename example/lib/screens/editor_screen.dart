@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_audio_fx/flutter_audio_fx.dart';
 import '../controllers/app_controller.dart';
 import '../models/recording_project.dart';
-import '../theme/voxforge_theme.dart';
+import '../theme/app_theme.dart';
 import '../widgets/effect_card.dart';
 import '../widgets/visualizer_panel.dart';
 import 'export_screen.dart';
@@ -53,7 +53,9 @@ class _EditorScreenState extends State<EditorScreen> {
       // Going WET: restore saved states
       if (_savedEnabledStates != null) {
         final chain = _ctrl.chain;
-        for (var i = 0; i < chain.length && i < _savedEnabledStates!.length; i++) {
+        for (var i = 0;
+            i < chain.length && i < _savedEnabledStates!.length;
+            i++) {
           if (chain[i].enabled != _savedEnabledStates![i]) {
             _ctrl.toggleEffect(i);
           }
@@ -115,7 +117,7 @@ class _EditorScreenState extends State<EditorScreen> {
                 fontSize: 11,
                 fontWeight: FontWeight.w700,
                 letterSpacing: 1.5,
-                color: VoxForgeTheme.accent,
+                color: AppTheme.accent,
               ),
             ),
           ),
@@ -143,7 +145,7 @@ class _EditorScreenState extends State<EditorScreen> {
                 _ControlButton(
                   icon: _ctrl.isPlaying ? Icons.stop : Icons.play_arrow,
                   label: _ctrl.isPlaying ? 'Stop' : 'Preview',
-                  color: VoxForgeTheme.primary,
+                  color: AppTheme.primary,
                   onTap: _togglePlayback,
                 ),
                 const SizedBox(width: 16),
@@ -151,15 +153,16 @@ class _EditorScreenState extends State<EditorScreen> {
                 _ControlButton(
                   icon: Icons.compare_arrows,
                   label: _abCompare ? 'DRY' : 'WET',
-                  color: _abCompare ? VoxForgeTheme.accent : VoxForgeTheme.textMuted,
+                  color: _abCompare ? AppTheme.accent : AppTheme.textMuted,
                   onTap: _toggleAB,
                 ),
                 const SizedBox(width: 16),
                 // Duration
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
-                    color: VoxForgeTheme.bgCard,
+                    color: AppTheme.bgCard,
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
@@ -167,7 +170,7 @@ class _EditorScreenState extends State<EditorScreen> {
                     style: const TextStyle(
                       fontSize: 13,
                       fontFamily: 'monospace',
-                      color: VoxForgeTheme.textSecondary,
+                      color: AppTheme.textSecondary,
                     ),
                   ),
                 ),
@@ -187,7 +190,7 @@ class _EditorScreenState extends State<EditorScreen> {
                     fontSize: 11,
                     fontWeight: FontWeight.w700,
                     letterSpacing: 2,
-                    color: VoxForgeTheme.textMuted,
+                    color: AppTheme.textMuted,
                   ),
                 ),
                 const Spacer(),
@@ -195,7 +198,7 @@ class _EditorScreenState extends State<EditorScreen> {
                   '${_ctrl.chain.where((e) => e.enabled).length}/${_ctrl.chain.length} active',
                   style: const TextStyle(
                     fontSize: 10,
-                    color: VoxForgeTheme.textMuted,
+                    color: AppTheme.textMuted,
                   ),
                 ),
               ],
@@ -220,7 +223,7 @@ class _EditorScreenState extends State<EditorScreen> {
                       return Material(
                         color: Colors.transparent,
                         elevation: 4,
-                        shadowColor: VoxForgeTheme.primary.withValues(alpha: 0.2),
+                        shadowColor: AppTheme.primary.withValues(alpha: 0.2),
                         borderRadius: BorderRadius.circular(14),
                         child: child,
                       );
@@ -258,9 +261,9 @@ class _EditorScreenState extends State<EditorScreen> {
                   ),
                 ),
                 style: OutlinedButton.styleFrom(
-                  foregroundColor: VoxForgeTheme.primary,
+                  foregroundColor: AppTheme.primary,
                   side: BorderSide(
-                    color: VoxForgeTheme.primary.withValues(alpha: 0.3),
+                    color: AppTheme.primary.withValues(alpha: 0.3),
                   ),
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   shape: RoundedRectangleBorder(
@@ -281,16 +284,16 @@ class _EditorScreenState extends State<EditorScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(Icons.auto_fix_high,
-              size: 48, color: VoxForgeTheme.textMuted.withValues(alpha: 0.3)),
+              size: 48, color: AppTheme.textMuted.withValues(alpha: 0.3)),
           const SizedBox(height: 12),
           const Text(
             'No effects in chain',
-            style: TextStyle(color: VoxForgeTheme.textMuted, fontSize: 13),
+            style: TextStyle(color: AppTheme.textMuted, fontSize: 13),
           ),
           const SizedBox(height: 4),
           const Text(
             'Tap "Add Effect" or select a preset',
-            style: TextStyle(color: VoxForgeTheme.textMuted, fontSize: 11),
+            style: TextStyle(color: AppTheme.textMuted, fontSize: 11),
           ),
         ],
       ),
@@ -352,10 +355,20 @@ class _AddEffectSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final effects = <(String, String, IconData, AudioEffect Function())>[
       ('Noise Gate', 'Remove silence', Icons.security, () => NoiseGate()),
-      ('Noise Suppress', 'Clean up noise', Icons.noise_aware, () => NoiseSuppress()),
+      (
+        'Noise Suppress',
+        'Clean up noise',
+        Icons.noise_aware,
+        () => NoiseSuppress()
+      ),
       ('Pitch Shift', 'Change pitch', Icons.swap_vert, () => PitchShift()),
       ('Auto-Tune', 'Pitch correction', Icons.music_note, () => AutoTune()),
-      ('Equalizer', '10-band EQ', Icons.equalizer, () => Equalizer.defaultBands()),
+      (
+        'Equalizer',
+        '10-band EQ',
+        Icons.equalizer,
+        () => Equalizer.defaultBands()
+      ),
       ('Compressor', 'Dynamic range', Icons.compress, () => Compressor()),
       ('Limiter', 'Prevent clipping', Icons.horizontal_rule, () => Limiter()),
       ('Reverb', 'Room ambience', Icons.waves, () => Reverb()),
@@ -379,7 +392,7 @@ class _AddEffectSheet extends StatelessWidget {
               width: 36,
               height: 4,
               decoration: BoxDecoration(
-                color: VoxForgeTheme.border,
+                color: AppTheme.border,
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
@@ -391,7 +404,7 @@ class _AddEffectSheet extends StatelessWidget {
               fontSize: 12,
               fontWeight: FontWeight.w700,
               letterSpacing: 2,
-              color: VoxForgeTheme.textMuted,
+              color: AppTheme.textMuted,
             ),
           ),
           const SizedBox(height: Spacing.md),
@@ -405,20 +418,20 @@ class _AddEffectSheet extends StatelessWidget {
                   width: (MediaQuery.of(context).size.width - 48 - 16) / 3,
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   decoration: BoxDecoration(
-                    color: VoxForgeTheme.bgElevated,
+                    color: AppTheme.bgElevated,
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: VoxForgeTheme.border, width: 0.5),
+                    border: Border.all(color: AppTheme.border, width: 0.5),
                   ),
                   child: Column(
                     children: [
-                      Icon(e.$3, size: 20, color: VoxForgeTheme.primary),
+                      Icon(e.$3, size: 20, color: AppTheme.primary),
                       const SizedBox(height: 6),
                       Text(
                         e.$1,
                         style: const TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.w600,
-                          color: VoxForgeTheme.textPrimary,
+                          color: AppTheme.textPrimary,
                         ),
                         textAlign: TextAlign.center,
                       ),
@@ -426,7 +439,7 @@ class _AddEffectSheet extends StatelessWidget {
                         e.$2,
                         style: const TextStyle(
                           fontSize: 8,
-                          color: VoxForgeTheme.textMuted,
+                          color: AppTheme.textMuted,
                         ),
                         textAlign: TextAlign.center,
                       ),

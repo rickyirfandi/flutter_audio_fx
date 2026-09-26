@@ -42,10 +42,8 @@ class SpectrumData {
     final bands = List<double>.filled(numBands, 0.0);
     for (var i = 0; i < numBands; i++) {
       // Logarithmic bin mapping
-      final startBin =
-          (binCount * (i / numBands).clamp(0, 1)).round();
-      final endBin =
-          (binCount * ((i + 1) / numBands).clamp(0, 1)).round();
+      final startBin = (binCount * (i / numBands).clamp(0, 1)).round();
+      final endBin = (binCount * ((i + 1) / numBands).clamp(0, 1)).round();
 
       var max = 0.0;
       for (var b = startBin; b < endBin && b < binCount; b++) {

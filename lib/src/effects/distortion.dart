@@ -1,5 +1,6 @@
 import 'effect.dart';
 
+/// Waveshaping curve used by [Distortion].
 enum DistortionType {
   softClip,
   hardClip,
@@ -14,10 +15,21 @@ enum DistortionType {
       };
 }
 
+/// Waveshaping distortion with 4x oversampling.
+///
+/// The shaper runs at four times the stream rate and is filtered back
+/// down, which keeps harmonics from aliasing into audible frequencies.
 class Distortion extends AudioEffect {
+  /// Amount of gain into the shaper, 0.0–1.0.
   double drive;
+
+  /// Low-pass on the distorted signal, 0.0 (dark) – 1.0 (open).
   double tone;
+
+  /// Wet/dry blend, 0.0 (dry) – 1.0 (fully wet).
   double mix;
+
+  /// Which waveshaping curve to apply.
   DistortionType distType;
 
   Distortion({

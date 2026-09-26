@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/recording_project.dart';
-import '../theme/voxforge_theme.dart';
+import '../theme/app_theme.dart';
 
 class ModeToggle extends StatelessWidget {
   final RecordingMode mode;
@@ -22,9 +22,9 @@ class ModeToggle extends StatelessWidget {
         margin: const EdgeInsets.symmetric(horizontal: 60),
         padding: const EdgeInsets.all(3),
         decoration: BoxDecoration(
-          color: VoxForgeTheme.bgCard,
+          color: AppTheme.bgCard,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: VoxForgeTheme.border, width: 0.5),
+          border: Border.all(color: AppTheme.border, width: 0.5),
         ),
         child: Row(
           children: [
@@ -60,10 +60,13 @@ class ModeToggle extends StatelessWidget {
           curve: Curves.easeOut,
           padding: const EdgeInsets.symmetric(vertical: 10),
           decoration: BoxDecoration(
-            color: isActive ? VoxForgeTheme.primary.withValues(alpha: 0.12) : Colors.transparent,
+            color: isActive
+                ? AppTheme.primary.withValues(alpha: 0.12)
+                : Colors.transparent,
             borderRadius: BorderRadius.circular(9),
             border: isActive
-                ? Border.all(color: VoxForgeTheme.primary.withValues(alpha: 0.3), width: 0.5)
+                ? Border.all(
+                    color: AppTheme.primary.withValues(alpha: 0.3), width: 0.5)
                 : null,
           ),
           child: Row(
@@ -72,7 +75,7 @@ class ModeToggle extends StatelessWidget {
               Icon(
                 icon,
                 size: 14,
-                color: isActive ? VoxForgeTheme.primary : VoxForgeTheme.textMuted,
+                color: isActive ? AppTheme.primary : AppTheme.textMuted,
               ),
               const SizedBox(width: 6),
               Text(
@@ -81,7 +84,7 @@ class ModeToggle extends StatelessWidget {
                   fontSize: 11,
                   fontWeight: FontWeight.w700,
                   letterSpacing: 1.5,
-                  color: isActive ? VoxForgeTheme.primary : VoxForgeTheme.textMuted,
+                  color: isActive ? AppTheme.primary : AppTheme.textMuted,
                 ),
               ),
             ],

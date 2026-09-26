@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
-/// VoxForge design system.
+/// Example app design system.
 /// Dark studio aesthetic — deep blacks, cyan primary, warm orange accent.
-abstract final class VoxForgeTheme {
+abstract final class AppTheme {
   // ── Colors ──
   static const bg = Color(0xFF0A0A0F);
   static const bgCard = Color(0xFF13131A);

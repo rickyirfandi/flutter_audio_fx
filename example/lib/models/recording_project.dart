@@ -34,7 +34,8 @@ class RecordingProject {
     final id = 'rec_${now.millisecondsSinceEpoch}';
     return RecordingProject(
       id: id,
-      title: title ?? 'Recording ${now.hour}:${now.minute.toString().padLeft(2, '0')}',
+      title: title ??
+          'Recording ${now.hour}:${now.minute.toString().padLeft(2, '0')}',
       createdAt: now,
       duration: Duration.zero,
       mode: mode,

@@ -37,7 +37,18 @@ class PitchData {
   );
 
   static const _names = [
-    'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B',
+    'C',
+    'C#',
+    'D',
+    'D#',
+    'E',
+    'F',
+    'F#',
+    'G',
+    'G#',
+    'A',
+    'A#',
+    'B',
   ];
 
   factory PitchData.fromFrequency(double freqHz, {double confidence = 1.0}) {

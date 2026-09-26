@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_audio_fx/flutter_audio_fx.dart';
-import '../theme/voxforge_theme.dart';
+import '../theme/app_theme.dart';
 
 class ActiveEffectsBar extends StatelessWidget {
   final List<AudioEffect> chain;
@@ -52,13 +52,13 @@ class ActiveEffectsBar extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
                 color: isOn
-                    ? VoxForgeTheme.primary.withValues(alpha: 0.12)
-                    : VoxForgeTheme.bgCard,
+                    ? AppTheme.primary.withValues(alpha: 0.12)
+                    : AppTheme.bgCard,
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
                   color: isOn
-                      ? VoxForgeTheme.primary.withValues(alpha: 0.4)
-                      : VoxForgeTheme.border,
+                      ? AppTheme.primary.withValues(alpha: 0.4)
+                      : AppTheme.border,
                   width: 0.5,
                 ),
               ),
@@ -68,9 +68,7 @@ class ActiveEffectsBar extends StatelessWidget {
                   Icon(
                     _iconFor(effect.type),
                     size: 12,
-                    color: isOn
-                        ? VoxForgeTheme.primary
-                        : VoxForgeTheme.textMuted,
+                    color: isOn ? AppTheme.primary : AppTheme.textMuted,
                   ),
                   const SizedBox(width: 5),
                   Text(
@@ -78,9 +76,7 @@ class ActiveEffectsBar extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.w600,
-                      color: isOn
-                          ? VoxForgeTheme.primary
-                          : VoxForgeTheme.textMuted,
+                      color: isOn ? AppTheme.primary : AppTheme.textMuted,
                     ),
                   ),
                 ],

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../controllers/app_controller.dart';
 import '../models/recording_project.dart';
-import '../theme/voxforge_theme.dart';
+import '../theme/app_theme.dart';
 import 'editor_screen.dart';
 
 class LibraryScreen extends StatefulWidget {
@@ -50,7 +50,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 '${_ctrl.recordings.length} files',
                 style: const TextStyle(
                   fontSize: 11,
-                  color: VoxForgeTheme.textMuted,
+                  color: AppTheme.textMuted,
                 ),
               ),
             ),
@@ -67,20 +67,20 @@ class _LibraryScreenState extends State<LibraryScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(Icons.folder_open,
-              size: 56, color: VoxForgeTheme.textMuted.withValues(alpha: 0.3)),
+              size: 56, color: AppTheme.textMuted.withValues(alpha: 0.3)),
           const SizedBox(height: 16),
           const Text(
             'No recordings yet',
             style: TextStyle(
               fontSize: 15,
               fontWeight: FontWeight.w500,
-              color: VoxForgeTheme.textMuted,
+              color: AppTheme.textMuted,
             ),
           ),
           const SizedBox(height: 6),
           const Text(
             'Hit record on the home screen to get started',
-            style: TextStyle(fontSize: 12, color: VoxForgeTheme.textMuted),
+            style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
           ),
         ],
       ),
@@ -102,11 +102,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
             alignment: Alignment.centerRight,
             padding: const EdgeInsets.only(right: 20),
             decoration: BoxDecoration(
-              color: VoxForgeTheme.danger.withValues(alpha: 0.15),
+              color: AppTheme.danger.withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(14),
             ),
             child: const Icon(Icons.delete_outline,
-                color: VoxForgeTheme.danger, size: 22),
+                color: AppTheme.danger, size: 22),
           ),
           child: _RecordingTile(
             project: rec,
@@ -140,7 +140,7 @@ class _RecordingTile extends StatelessWidget {
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.all(14),
-        decoration: VoxForgeTheme.cardDecoration,
+        decoration: AppTheme.cardDecoration,
         child: Row(
           children: [
             // Waveform thumbnail placeholder
@@ -148,16 +148,14 @@ class _RecordingTile extends StatelessWidget {
               width: 48,
               height: 48,
               decoration: BoxDecoration(
-                color: VoxForgeTheme.bgSurface,
+                color: AppTheme.bgSurface,
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Icon(
-                project.mode == RecordingMode.live
-                    ? Icons.bolt
-                    : Icons.tune,
+                project.mode == RecordingMode.live ? Icons.bolt : Icons.tune,
                 color: project.mode == RecordingMode.live
-                    ? VoxForgeTheme.accent
-                    : VoxForgeTheme.primary,
+                    ? AppTheme.accent
+                    : AppTheme.primary,
                 size: 22,
               ),
             ),
@@ -172,7 +170,7 @@ class _RecordingTile extends StatelessWidget {
                     style: const TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
-                      color: VoxForgeTheme.textPrimary,
+                      color: AppTheme.textPrimary,
                     ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -185,7 +183,7 @@ class _RecordingTile extends StatelessWidget {
                         style: const TextStyle(
                           fontSize: 11,
                           fontFamily: 'monospace',
-                          color: VoxForgeTheme.textMuted,
+                          color: AppTheme.textMuted,
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -194,8 +192,8 @@ class _RecordingTile extends StatelessWidget {
                             horizontal: 6, vertical: 2),
                         decoration: BoxDecoration(
                           color: (project.mode == RecordingMode.live
-                                  ? VoxForgeTheme.accent
-                                  : VoxForgeTheme.primary)
+                                  ? AppTheme.accent
+                                  : AppTheme.primary)
                               .withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(4),
                         ),
@@ -206,8 +204,8 @@ class _RecordingTile extends StatelessWidget {
                             fontWeight: FontWeight.w700,
                             letterSpacing: 1,
                             color: project.mode == RecordingMode.live
-                                ? VoxForgeTheme.accent
-                                : VoxForgeTheme.primary,
+                                ? AppTheme.accent
+                                : AppTheme.primary,
                           ),
                         ),
                       ),
@@ -216,7 +214,7 @@ class _RecordingTile extends StatelessWidget {
                         project.formattedDate,
                         style: const TextStyle(
                           fontSize: 10,
-                          color: VoxForgeTheme.textMuted,
+                          color: AppTheme.textMuted,
                         ),
                       ),
                     ],
@@ -226,7 +224,7 @@ class _RecordingTile extends StatelessWidget {
             ),
             // Arrow
             const Icon(Icons.chevron_right,
-                size: 18, color: VoxForgeTheme.textMuted),
+                size: 18, color: AppTheme.textMuted),
           ],
         ),
       ),
