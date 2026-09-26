@@ -297,6 +297,31 @@ jobs:
           echo "=== Linux ==="   && ls -lh linux/libflutter_audio_fx_core.so
           echo "=== Windows ===" && ls -lh windows/flutter_audio_fx_core.dll
 
+      # Commit before validating: `pub publish --dry-run` fails on modified
+      # tracked files, which updated binaries always are. Validation then
+      # runs on the exact tree that will be pushed; nothing is pushed if it
+      # fails.
+      - name: Commit precompiled binaries
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add -f android/src/main/jniLibs/ ios/flutter_audio_fx_core.xcframework/ \n            macos/libflutter_audio_fx_core.a linux/libflutter_audio_fx_core.so \n            windows/flutter_audio_fx_core.dll
+
+          if git diff --cached --quiet; then
+            echo "No changes — binaries are already up to date."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            git commit -m "chore: update precompiled native binaries
+
+          Built from ${GITHUB_SHA::8} via CI (${{ github.ref_name }}).
+          Platforms: Android (arm64-v8a, armeabi-v7a, x86_64), iOS
+          (xcframework), macOS (universal .a), Linux (x64),
+          Windows (x64)."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -311,38 +336,19 @@ jobs:
           flutter test
           flutter pub publish --dry-run
 
-      - name: Commit precompiled binaries
+      - name: Push precompiled binaries
+        if: steps.commit.outputs.changed == 'true'
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git add -f \
-            android/src/main/jniLibs/ \
-            ios/flutter_audio_fx_core.xcframework/ \
-            macos/libflutter_audio_fx_core.a \
-            linux/libflutter_audio_fx_core.so \
-            windows/flutter_audio_fx_core.dll
-
-          if git diff --cached --quiet; then
-            echo "No changes — binaries are already up to date."
+          # Tags publish to the default branch (fails if it has moved past
+          # the tagged commit — re-tag rather than mix code and binaries);
+          # branch dispatches push back to the branch that was built.
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            target="${{ github.event.repository.default_branch }}"
           else
-            git commit -m "chore: update precompiled native binaries
-
-          Built from ${GITHUB_SHA::8} via CI (${{ github.ref_name }}).
-          Platforms: Android (arm64-v8a, armeabi-v7a, x86_64), iOS
-          (xcframework), macOS (universal .a), Linux (x64),
-          Windows (x64)."
-            # Tags publish to the default branch (fails if it has moved past
-            # the tagged commit — re-tag rather than mix code and binaries);
-            # branch dispatches push back to the branch that was built.
-            if [[ "${{ github.ref_type }}" == "tag" ]]; then
-              target="${{ github.event.repository.default_branch }}"
-            else
-              target="${{ github.ref_name }}"
-            fi
-            git push origin HEAD:"$target"
-            echo "Precompiled binaries committed and pushed."
+            target="${{ github.ref_name }}"
           fi
+          git push origin HEAD:"$target"
+          echo "Precompiled binaries committed and pushed."
 
       # ── On tags: attach per-platform zips to a GitHub Release ──
       - name: Zip per-platform bundles for release
