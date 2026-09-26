@@ -2,7 +2,7 @@ name: flutter_audio_fx
 description: >-
   Real-time voice effects for Flutter powered by a Rust DSP core: auto-tune,
   pitch shift, noise suppression, EQ, reverb, de-esser and more.
-version: 0.3.0
+version: 0.4.0
 homepage: https://github.com/rickyirfandi/flutter_audio_fx
 repository: https://github.com/rickyirfandi/flutter_audio_fx
 issue_tracker: https://github.com/rickyirfandi/flutter_audio_fx/issues

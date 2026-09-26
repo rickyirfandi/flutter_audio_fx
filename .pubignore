@@ -1,0 +1,32 @@
+# pub uses this file INSTEAD of .gitignore for the package root, so the
+# .gitignore rules are repeated below. Keep both in sync.
+
+# ── Internal / development-only docs (not for package consumers) ──
+CLAUDE.md
+doc/*_PRD.md
+doc/*_TECH.md
+
+# ── Mirrored from .gitignore ──
+# Flutter
+.dart_tool/
+.packages
+build/
+*.iml
+.idea/
+.vscode/
+*.lock
+!rust/Cargo.lock
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# Rust
+rust/target/
+
+# Generated
+lib/src/rust/
+*.g.dart
+*.freezed.dart
+
+# OS
+.DS_Store
+Thumbs.db

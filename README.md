@@ -55,7 +55,7 @@
 
 ```yaml
 dependencies:
-  flutter_audio_fx: ^0.3.0
+  flutter_audio_fx: ^0.4.0
 ```
 
 Or track the repository directly:
@@ -65,7 +65,7 @@ dependencies:
   flutter_audio_fx:
     git:
       url: https://github.com/rickyirfandi/flutter_audio_fx.git
-      ref: v0.3.0
+      ref: v0.4.0
 ```
 
 Then follow [Platform setup](#-platform-setup) to enable microphone access.
