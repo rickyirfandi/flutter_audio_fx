@@ -307,7 +307,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add -f android/src/main/jniLibs/ ios/flutter_audio_fx_core.xcframework/ \n            macos/libflutter_audio_fx_core.a linux/libflutter_audio_fx_core.so \n            windows/flutter_audio_fx_core.dll
+          git add -f \
+            android/src/main/jniLibs/ \
+            ios/flutter_audio_fx_core.xcframework/ \
+            macos/libflutter_audio_fx_core.a \
+            linux/libflutter_audio_fx_core.so \
+            windows/flutter_audio_fx_core.dll
 
           if git diff --cached --quiet; then
             echo "No changes — binaries are already up to date."
